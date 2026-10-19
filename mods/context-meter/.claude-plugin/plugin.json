@@ -1,0 +1,1 @@
+{ "name": "context-meter", "version": "0.1.0", "description": "입력창 위에 컨텍스트 사용량 게이지를 한 줄로 보여줍니다.", "types": "./types/index.d.ts" }

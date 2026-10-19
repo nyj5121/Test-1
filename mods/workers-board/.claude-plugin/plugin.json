@@ -1,0 +1,1 @@
+{ "name": "workers-board", "version": "0.1.0", "description": "서브에이전트 현황판: WORKERS 패널에 카드로 보여줍니다.", "types": "./types/index.d.ts" }
