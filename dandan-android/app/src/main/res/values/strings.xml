@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">단단</string>
+    <string name="a11y_desc">잠금 중에 설정, 알림창, 최근 앱 같은 빠져나갈 길을 막고, 사용시간 약속을 지키도록 앱 실행을 감지하는 데만 사용해요.</string>
+</resources>
