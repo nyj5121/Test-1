@@ -134,16 +134,65 @@ fun PromiseTab() {
             Spacer(Modifier.height(8.dp))
             Text("숏폼 차단", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             SwitchLine("유튜브 쇼츠", Store.shortsYt) { Store.shortsYt = it }
-            SwitchLine("인스타그램 릴스", Store.reelsIg) { Store.reelsIg = it }
             Text(
                 "앱 화면 구성이 바뀌면 동작하지 않을 수 있어요.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            InstagramBlock()
         }
     }
 
     if (creating || editing != null) {
         PromiseEditor(editing, onDismiss = { creating = false; editing = null })
+    }
+}
+
+@Composable
+private fun InstagramBlock() {
+    val ctx = LocalContext.current
+    Spacer(Modifier.height(20.dp))
+    Text("인스타그램", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+    SwitchLine("스토리·DM만 쓰기", Store.igMode) { want ->
+        if (want && !Perm.accessibility(ctx)) toast(ctx, "접근성 권한을 먼저 켜 주세요") else Store.igMode = want
+    }
+    Text(
+        "홈의 피드를 가리고 릴스·탐색·프로필을 막아요. 스토리와 DM은 그대로 써요. 못 알아보는 화면에서는 아무것도 하지 않아요.",
+        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (Store.igMode) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("피드 가림막 시작 위치", Modifier.weight(1f), fontSize = 14.sp)
+            Pick(
+                if (Store.igTop == 0) "자동" else "${Store.igTop}%",
+                listOf("자동" to 0, "20%" to 20, "25%" to 25, "30%" to 30, "35%" to 35, "40%" to 40, "45%" to 45)
+            ) { Store.igTop = it }
+        }
+        Text(
+            "스토리 줄이 가려지거나 피드가 보이면 이 값을 바꿔 보세요.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    SwitchLine("화면 진단 기록 (문제 해결용)", Store.igDiag) { Store.igDiag = it }
+    if (Store.igDiag) {
+        val dump = Store.str("igDump")
+        Text(
+            if (dump.isBlank()) "인스타를 열어 홈·릴스·DM·스토리를 한 번씩 보고 오세요."
+            else "기록 ${dump.length}자 · 화면 ${dump.split("=== ").size - 1}종",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row {
+            TextButton(onClick = {
+                val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("dandan-ig", dump))
+                toast(ctx, "복사했어요")
+            }) { Text("복사") }
+            TextButton(onClick = { Store.put("igDump", "") }) { Text("지우기") }
+        }
+        Text(
+            "기록에는 화면 요소 이름과 위치만 담기고 메시지나 게시물 글은 담기지 않아요.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

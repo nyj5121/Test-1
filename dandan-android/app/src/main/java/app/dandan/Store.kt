@@ -121,9 +121,16 @@ object Store {
     var shortsYt: Boolean
         get() = bool("shortsYt", false)
         set(v) = put("shortsYt", v)
-    var reelsIg: Boolean
-        get() = bool("reelsIg", false)
-        set(v) = put("reelsIg", v)
+    var igMode: Boolean
+        get() = bool("igMode", false)
+        set(v) = put("igMode", v)
+    var igDiag: Boolean
+        get() = bool("igDiag", false)
+        set(v) = put("igDiag", v)
+    /** 홈에서 피드 가림막이 시작되는 위치(화면 높이의 %). 0이면 자동. */
+    var igTop: Int
+        get() = int("igTop", 0)
+        set(v) = put("igTop", v)
     var bgUri: String
         get() = str("bgUri")
         set(v) = put("bgUri", v)
