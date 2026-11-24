@@ -95,6 +95,7 @@ fun LockScreen(onClose: () -> Unit) {
     val ctx = LocalContext.current
     var n by remember { mutableIntStateOf(0) }
     var emergency by remember { mutableStateOf(false) }
+    var friendAsk by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(250); n++ } }
 
     val phone = remember(n) { Engine.phone(ctx) }
@@ -162,6 +163,13 @@ fun LockScreen(onClose: () -> Unit) {
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 QuickApps(ctx)
+                if (Friend.scopeOn("phone_unlock") && phone?.trial != true) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "${Friend.name()}에게 해제 요청", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp,
+                        modifier = Modifier.clickable { friendAsk = true }.padding(8.dp)
+                    )
+                }
                 if (Store.emergencyEnabled && phone?.trial != true) {
                     Spacer(Modifier.height(16.dp))
                     Text(
@@ -173,6 +181,13 @@ fun LockScreen(onClose: () -> Unit) {
         }
     }
     if (emergency) EmergencyDialog(ctx, onDismiss = { emergency = false })
+    if (friendAsk) {
+        FriendRequestDialog(
+            kind = "phone_unlock", label = "폰 잠금", param = "0", allowShare = false,
+            onDismiss = { friendAsk = false },
+            onApproved = { friendAsk = false; Engine.releaseByFriend(ctx) }
+        )
+    }
 }
 
 private fun loadBg(ctx: Context, uri: String) = if (uri.isBlank()) null else try {

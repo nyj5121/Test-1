@@ -57,6 +57,11 @@ fun ScheduleTab(goPerm: () -> Unit) {
     var creating by remember { mutableStateOf(false) }
     val list = Store.schedules().filter { it.target == target }
     val now = System.currentTimeMillis()
+    var ask by remember { mutableStateOf<Pair<Schedule, () -> Unit>?>(null) }
+    fun blocked(s: Schedule, then: () -> Unit) {
+        if (Friend.scopeOn("sched_edit")) ask = Pair(s, then)
+        else toast(ctx, "곧 잠기는 예약은 지금 고칠 수 없어요")
+    }
 
     Column(Modifier.fillMaxSize()) {
         Seg(listOf("폰 잠금", "앱 잠금"), mode) { mode = it }
@@ -80,20 +85,22 @@ fun ScheduleTab(goPerm: () -> Unit) {
                 ScheduleCard(
                     s,
                     onToggle = { on ->
-                        if (!on && Engine.editLocked(s)) toast(ctx, "곧 잠기는 예약은 지금 끌 수 없어요")
-                        else upsert(
-                            s.copy(
-                                enabled = on,
-                                onceStart = if (on && s.days == 0) Engine.nextOccurrence(s.startMin, now) else s.onceStart
+                        val act = {
+                            upsert(
+                                s.copy(
+                                    enabled = on,
+                                    onceStart = if (on && s.days == 0) Engine.nextOccurrence(s.startMin, now) else s.onceStart
+                                )
                             )
-                        )
+                        }
+                        if (!on && Engine.editLocked(s)) blocked(s, act) else act()
                     },
                     onEdit = {
-                        if (Engine.editLocked(s)) toast(ctx, "곧 잠기는 예약은 지금 고칠 수 없어요") else editing = s
+                        if (Engine.editLocked(s)) blocked(s) { editing = s } else editing = s
                     },
                     onDelete = {
-                        if (Engine.editLocked(s)) toast(ctx, "곧 잠기는 예약은 지금 지울 수 없어요")
-                        else Store.saveSchedules(Store.schedules().filter { it.id != s.id })
+                        val act = { Store.saveSchedules(Store.schedules().filter { it.id != s.id }) }
+                        if (Engine.editLocked(s)) blocked(s, act) else act()
                     }
                 )
             }
@@ -122,6 +129,18 @@ fun ScheduleTab(goPerm: () -> Unit) {
             init = editing, target = target,
             onSave = { upsert(it); editing = null; creating = false },
             onDismiss = { editing = null; creating = false }
+        )
+    }
+    ask?.let { pair ->
+        val sc = pair.first
+        FriendRequestDialog(
+            kind = "sched_edit", label = "${Fmt.clock(sc.startMin)}-${Fmt.clock(sc.endMin)}", param = "10",
+            onDismiss = { ask = null },
+            onApproved = {
+                Store.put("schedPass_${sc.id}", System.currentTimeMillis() + 10 * 60_000L)
+                ask = null
+                pair.second()
+            }
         )
     }
 }

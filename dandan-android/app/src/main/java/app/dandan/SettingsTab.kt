@@ -67,9 +67,12 @@ private fun Row2(title: String, sub: String, onClick: (() -> Unit)? = null, trai
 }
 
 /** 잠금이 곧 시작되거나 진행 중이면 보호 설정을 끌 수 없다. */
+private val relaxAsk = mutableStateOf(false)
+
 private fun canRelax(ctx: Context): Boolean {
     if (Engine.nearLock(ctx)) {
-        toast(ctx, "잠금 중이거나 2시간 안에 잠금이 시작돼서 지금은 끌 수 없어요")
+        if (Friend.scopeOn("relax")) relaxAsk.value = true
+        else toast(ctx, "잠금 중이거나 2시간 안에 잠금이 시작돼서 지금은 끌 수 없어요")
         return false
     }
     return true
@@ -82,6 +85,8 @@ fun SettingsTab(goPerm: () -> Unit) {
     var allowedPicker by remember { mutableStateOf(false) }
     var deco by remember { mutableStateOf(false) }
     var faq by remember { mutableStateOf(false) }
+    var friendSetup by remember { mutableStateOf(false) }
+    var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text("설정", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 8.dp))
@@ -158,6 +163,32 @@ fun SettingsTab(goPerm: () -> Unit) {
         }
         HorizontalDivider(Modifier.padding(top = 8.dp))
 
+        Section("친구 해제")
+        Row2(
+            "친구",
+            if (Friend.registered()) "${Friend.name()} 등록됨" else "친구 한 명을 정하면 해제를 친구가 결정해요",
+            onClick = { friendSetup = true }
+        ) { Text("›", fontSize = 20.sp) }
+        if (Friend.registered()) {
+            Text(
+                "아래 옵션을 켜면 그 상황에서 내가 아니라 친구가 풀지 말지 결정해요. 옵션을 끄거나 친구를 끊을 때도 친구 승인이 필요해요.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+            Friend.SCOPES.forEach { (key, title, desc) ->
+                Row2(title, desc) {
+                    Switch(
+                        checked = Store.bool("fs_$key"),
+                        onCheckedChange = { want ->
+                            if (want) Store.put("fs_$key", true)
+                            else cfgAsk = Pair<String, () -> Unit>("옵션 끄기: $title", { Store.put("fs_$key", false) })
+                        }
+                    )
+                }
+            }
+        }
+        HorizontalDivider(Modifier.padding(top = 8.dp))
+
         Section("기타")
         Row2("권한 설정", "접근성, 다른 앱 위에 표시, 기기 관리자 등", onClick = goPerm) { Text("›", fontSize = 20.sp) }
         Row2("자주 묻는 질문", "잠금이 안 풀릴 때, 권한이 막힐 때", onClick = { faq = true }) { Text("›", fontSize = 20.sp) }
@@ -172,6 +203,44 @@ fun SettingsTab(goPerm: () -> Unit) {
         )
     }
     if (deco) DecoDialog { deco = false }
+    if (friendSetup) {
+        if (Friend.registered()) {
+            AlertDialog(
+                onDismissRequest = { friendSetup = false },
+                title = { Text("친구: ${Friend.name()}") },
+                text = {
+                    Text("친구를 끊으려면 ${Friend.name()}의 승인이 필요해요. 친구가 열쇠를 잃어버리면 옵션을 끌 수 없을 수 있으니, 친구가 연결 페이지의 '백업'을 해 두게 하세요.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        friendSetup = false
+                        cfgAsk = Pair<String, () -> Unit>("친구 연결 끊기", { Friend.unregister() })
+                    }) { Text("친구 끊기") }
+                },
+                dismissButton = { TextButton(onClick = { friendSetup = false }) { Text("닫기") } }
+            )
+        } else {
+            FriendSetupDialog { friendSetup = false }
+        }
+    }
+    cfgAsk?.let { pair ->
+        FriendRequestDialog(
+            kind = "cfg_change", label = pair.first, param = "0",
+            onDismiss = { cfgAsk = null },
+            onApproved = { cfgAsk = null; pair.second() }
+        )
+    }
+    if (relaxAsk.value) {
+        FriendRequestDialog(
+            kind = "relax", label = "잠금 강도 설정", param = "0",
+            onDismiss = { relaxAsk.value = false },
+            onApproved = {
+                relaxAsk.value = false
+                Store.put("relaxPass", System.currentTimeMillis() + 10 * 60_000L)
+                toast(ctx, "10분 동안 설정을 끌 수 있어요")
+            }
+        )
+    }
     if (faq) {
         AlertDialog(
             onDismissRequest = { faq = false },

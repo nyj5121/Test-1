@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>단단 친구 승인</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f1115; color: #eceef3;
+         font: 16px/1.55 system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 24px 18px 60px; }
+  h1 { font-size: 22px; margin: 8px 0 2px; }
+  h2 { font-size: 17px; margin: 0 0 8px; }
+  .sub { color: #a9afc0; font-size: 14px; margin: 0 0 8px; }
+  .card { background: #171a21; border-radius: 16px; padding: 18px; margin: 14px 0; }
+  .warn { background: #3a2a10; color: #ffd28a; }
+  .ok { background: #12301f; }
+  .bad { background: #3a1616; }
+  button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 12px 18px;
+           background: #8c9bff; color: #0b0e2a; cursor: pointer; margin: 6px 8px 0 0; }
+  button.ghost { background: #232733; color: #eceef3; }
+  button:disabled { opacity: .4; cursor: default; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 96px; border-radius: 12px; border: 1px solid #3a4054;
+             background: #0f1115; color: #eceef3; padding: 10px; font: 13px/1.4 ui-monospace, monospace; word-break: break-all; }
+  label.chk { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 15px; }
+  details { margin-top: 18px; color: #a9afc0; font-size: 14px; }
+  summary { cursor: pointer; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script src="core.js"></script>
+<script>
+(function () {
+  var C = window.DandanCore;
+  var app = document.getElementById('app');
+  var KEY = 'dandan_key';
+
+  function el(tag, props) {
+    var e = document.createElement(tag);
+    if (props) for (var k in props) {
+      if (k === 'class') e.className = props[k];
+      else if (k === 'onclick') e.onclick = props[k];
+      else if (k === 'checked') e.checked = props[k];
+      else if (k === 'value') e.value = props[k];
+      else e.setAttribute(k, props[k]);
+    }
+    for (var i = 2; i < arguments.length; i++) e.append(arguments[i]);
+    return e;
+  }
+
+  function copy(text, btn) {
+    var done = function () { btn.textContent = '복사했어요'; setTimeout(function () { btn.textContent = '복사'; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else fallback();
+    function fallback() {
+      var t = el('textarea', { value: text });
+      document.body.append(t); t.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      t.remove(); done();
+    }
+  }
+
+  function loadKey() {
+    try { var raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  }
+  async function ensureKey() {
+    var k = loadKey();
+    if (k && k.priv && k.pub) return k;
+    k = await C.generate();
+    localStorage.setItem(KEY, JSON.stringify(k));
+    return k;
+  }
+
+  function codeCard(title, code, hint) {
+    var ta = el('textarea', { readonly: 'readonly', value: code });
+    var b = el('button', { onclick: function () { copy(code, b); } }, '복사');
+    return el('div', { class: 'card ok' }, el('h2', null, title), ta, b, el('p', { class: 'sub' }, hint));
+  }
+
+  function backupBox() {
+    var d = el('details', null, el('summary', null, '열쇠 백업·복원 (폰을 바꾸거나 브라우저 기록을 지울 때)'));
+    var k = loadKey();
+    if (k) {
+      var code = C.b64u.enc(C.enc.encode(JSON.stringify(k)));
+      var ta = el('textarea', { readonly: 'readonly', value: code });
+      var b = el('button', { class: 'ghost', onclick: function () { copy(code, b); } }, '복사');
+      d.append(el('p', null, '이 코드를 나만 아는 곳에 보관하세요. 이 코드가 있으면 승인 권한을 되살릴 수 있어요. 다른 사람에게 보여 주면 안 돼요.'), ta, b);
+    }
+    var rt = el('textarea', { placeholder: '백업 코드를 여기에 붙여넣기' });
+    var rb = el('button', { class: 'ghost', onclick: async function () {
+      try {
+        var o = JSON.parse(C.dec.decode(C.b64u.dec(rt.value)));
+        await C.spki(o.pub);
+        await C.sign(o.priv, 'test');
+        localStorage.setItem(KEY, JSON.stringify(o));
+        rb.textContent = '복원했어요'; setTimeout(render, 700);
+      } catch (e) { rb.textContent = '코드가 올바르지 않아요'; }
+    } }, '복원');
+    d.append(el('p', null, '복원하기'), rt, rb);
+    return d;
+  }
+
+  function inApp() { return /KAKAOTALK|FBAN|FBAV|Instagram|NAVER\(inapp|Line\//i.test(navigator.userAgent); }
+
+  async function renderHome(from) {
+    app.append(el('p', { class: 'sub' }, '친구가 되어 주면, 상대가 잠금을 풀고 싶을 때 풀어 줄지 말지를 당신이 정해요.'));
+    if (from !== null) {
+      app.append(el('div', { class: 'card' },
+        el('h2', null, (from || '친구') + '님이 당신을 친구로 지정하려고 해요'),
+        el('p', null, '"친구 되어 주기"를 누르면 연결 코드가 만들어져요. 그 코드를 ' + (from || '친구') + '님에게 보내 주세요. 그 뒤로는 ' + (from || '친구') + '님이 요청을 보내면 이 페이지에서 승인하거나 거절할 수 있어요.')));
+    }
+    var holder = el('div');
+    async function show() {
+      var k = await ensureKey();
+      holder.replaceChildren(codeCard('내 연결 코드', await C.spki(k.pub), '이 코드를 상대에게 보내세요. 이 코드는 공개해도 안전해요.'));
+    }
+    if (loadKey()) await show();
+    else app.append(el('button', { onclick: async function () { try { await show(); } catch (e) { holder.replaceChildren(el('div', { class: 'card bad' }, '열쇠를 만들 수 없어요. https 주소에서 일반 브라우저로 열어 주세요.')); } } }, '친구 되어 주기'));
+    app.append(holder, backupBox());
+  }
+
+  function renderRequest(r) {
+    var text;
+    try { text = C.dec.decode(C.b64u.dec(r)); } catch (e) { text = null; }
+    var q = text && C.parseReq(text);
+    if (!q) { app.append(el('div', { class: 'card bad' }, '요청 링크가 올바르지 않아요.')); return; }
+    var now = Math.floor(Date.now() / 1000);
+    app.append(el('div', { class: 'card' }, el('h2', null, '승인 요청'), el('p', null, C.describe(q))));
+    if (q.exp < now) { app.append(el('div', { class: 'card bad' }, '이 요청은 만료됐어요. 상대에게 새 링크를 달라고 하세요.')); return; }
+    if (!loadKey()) {
+      app.append(el('div', { class: 'card warn' }, '아직 이 브라우저에 친구 연결이 없어요. 먼저 상대의 초대 링크로 "친구 되어 주기"를 해야 승인할 수 있어요. 예전에 연결했다면 아래 백업으로 복원하세요.'), backupBox());
+      return;
+    }
+    var chk = el('input', { type: 'checkbox' });
+    var go = el('button', { onclick: approve }, '승인하기');
+    var no = el('button', { class: 'ghost', onclick: function () {
+      holder.replaceChildren(el('div', { class: 'card' }, '거절했어요. 아무 코드도 만들어지지 않았어요.'));
+    } }, '거절');
+    go.disabled = true;
+    chk.onchange = function () { go.disabled = !chk.checked; };
+    var holder = el('div');
+    app.append(
+      el('div', { class: 'card warn' }, '승인하면 상대의 잠금이 풀리거나 느슨해져요. 정말 필요한 상황인지 직접 물어보고 정하세요.'),
+      el('label', { class: 'chk' }, chk, el('span', null, '상대가 맞고, 승인해도 좋다고 판단했어요.')),
+      go, no, holder
+    );
+    async function approve() {
+      try {
+        var k = loadKey();
+        var code = await C.sign(k.priv, text);
+        holder.replaceChildren(codeCard('승인 코드', code, '이 코드를 ' + (q.from || '상대') + '님에게 보내 주세요. 이 요청에만 쓸 수 있고 30분 안에 써야 해요.'));
+        go.disabled = true;
+      } catch (e) { holder.replaceChildren(el('div', { class: 'card bad' }, '승인 코드를 만들 수 없어요.')); }
+    }
+  }
+
+  function render() {
+    app.replaceChildren(el('h1', null, '단단 친구 승인'));
+    if (inApp()) app.append(el('div', { class: 'card warn' }, '앱 안의 브라우저에서는 연결 정보가 저장되지 않을 수 있어요. 오른쪽 위 메뉴에서 "다른 브라우저로 열기"를 눌러 크롬이나 삼성 인터넷으로 여세요.'));
+    var q = new URLSearchParams(location.hash.replace(/^#/, ''));
+    var r = q.get('r');
+    if (r) renderRequest(r);
+    else renderHome(q.has('hello') ? (q.get('from') || '') : null);
+  }
+
+  window.addEventListener('hashchange', render);
+  render();
+})();
+</script>
+</body>
+</html>

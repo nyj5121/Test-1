@@ -93,6 +93,10 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
     var stage by remember { mutableIntStateOf(0) }
     var phase by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf(false) }
+    val friendExtra = Friend.scopeOn("promise_extra")
+    val friendUnlock = Friend.scopeOn("app_unlock")
+    var askMinutes by remember { mutableIntStateOf(0) }
+    var askUnlock by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(stage) {
         if (stage == 1) {
@@ -114,6 +118,15 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
                 Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 16.sp)
                 Spacer(Modifier.height(32.dp))
                 Button(onClick = onHome, Modifier.fillMaxWidth().height(54.dp)) { Text("홈으로") }
+                if (friendUnlock) {
+                    Spacer(Modifier.height(18.dp))
+                    Text("${Friend.name()}에게 잠깐 풀어 달라고 하기", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(10, 30, 60).forEach { m ->
+                            OutlinedButton(onClick = { askUnlock = m }) { Text("${m}분") }
+                        }
+                    }
+                }
             }
 
             mode == "limit" -> {
@@ -124,11 +137,17 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
                 Text("내일 다시 만나요.", color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp)
                 Spacer(Modifier.height(32.dp))
                 Button(onClick = onHome, Modifier.fillMaxWidth().height(54.dp)) { Text("홈으로") }
+                if (friendExtra) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(onClick = { sheet = true }, Modifier.fillMaxWidth().height(54.dp)) {
+                        Text("${Friend.name()}에게 시간 요청하기")
+                    }
+                }
             }
 
             stage == 0 -> {
                 val used = if (pr != null) Promises.used(pr, today) else 0
-                val limit = pr?.limit ?: 1
+                val limit = pr?.let { Promises.limitOf(it) } ?: 1
                 val left = (limit - used).coerceAtLeast(0)
                 val leftText = if (pr?.unit == "count") "${left}번 남음" else "${Fmt.minutes(left)} 남음"
                 val limitText = if (pr?.unit == "count") "하루 ${limit}번" else "하루 ${Fmt.minutes(limit)}"
@@ -180,7 +199,9 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
     }
 
     if (sheet) {
-        val maxAdd = if (pr != null && pr.unit == "time") (pr.limit - Promises.used(pr, today)).coerceAtLeast(1) else 120
+        val maxAdd = if (friendExtra) 240
+        else if (pr != null && pr.unit == "time") (Promises.limitOf(pr) - Promises.used(pr, today)).coerceAtLeast(1)
+        else 120
         var minutes by remember { mutableIntStateOf(0) }
         AlertDialog(
             onDismissRequest = { sheet = false },
@@ -205,14 +226,48 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
                 Button(
                     enabled = minutes > 0,
                     onClick = {
-                        Store.put("grant_$pkg", SystemClock.elapsedRealtime() + minutes * 60_000L)
-                        Store.addOpen(pkg)
-                        sheet = false
-                        onDone()
+                        if (friendExtra) {
+                            askMinutes = minutes
+                            sheet = false
+                        } else {
+                            Store.put("grant_$pkg", SystemClock.elapsedRealtime() + minutes * 60_000L)
+                            Store.addOpen(pkg)
+                            sheet = false
+                            onDone()
+                        }
                     }
-                ) { Text("확인") }
+                ) { Text(if (friendExtra) "친구에게 요청" else "확인") }
             },
             dismissButton = { TextButton(onClick = { sheet = false }) { Text("취소") } }
         )
     }
+
+    if (askMinutes > 0) {
+        FriendRequestDialog(
+            kind = "promise_extra", label = label, param = askMinutes.toString(),
+            onDismiss = { askMinutes = 0 },
+            onApproved = { applyExtra(pkg, askMinutes, pr); askMinutes = 0; onDone() }
+        )
+    }
+    if (askUnlock > 0) {
+        FriendRequestDialog(
+            kind = "app_unlock", label = label, param = askUnlock.toString(),
+            onDismiss = { askUnlock = 0 },
+            onApproved = {
+                Store.put("pass_$pkg", SystemClock.elapsedRealtime() + askUnlock * 60_000L)
+                askUnlock = 0
+                onDone()
+            }
+        )
+    }
+}
+
+/** 친구가 승인한 만큼 오늘의 한도를 늘리고, 지금부터 그 시간 동안 쓰게 해 준다. */
+private fun applyExtra(pkg: String, minutes: Int, pr: Promise?) {
+    if (pr != null) {
+        val k = "bonus_${Store.dayKey()}_$pkg"
+        Store.put(k, Store.int(k) + if (pr.unit == "time") minutes else 1)
+    }
+    Store.put("grant_$pkg", SystemClock.elapsedRealtime() + minutes * 60_000L)
+    Store.addOpen(pkg)
 }

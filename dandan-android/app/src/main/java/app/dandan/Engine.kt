@@ -165,6 +165,9 @@ object Engine {
             if (s.target == "app" && schedWindow(s, now) != null) out.addAll(s.apps)
         }
         out.addAll(Store.strSet("dl_${Store.dayKey()}"))
+        // 친구가 잠깐 풀어 준 앱은 제외
+        val el = SystemClock.elapsedRealtime()
+        out.removeAll { Store.long("pass_$it") > el }
         return out
     }
 
@@ -216,6 +219,7 @@ object Engine {
 
     // ---------- 수정 방지 ----------
     fun editLocked(s: Schedule): Boolean {
+        if (Store.long("schedPass_${s.id}") > System.currentTimeMillis()) return false   // 친구가 허락함
         if (s.locked) return true
         if (!Store.editProtect || !s.enabled) return false
         val now = System.currentTimeMillis()
@@ -226,6 +230,7 @@ object Engine {
 
     /** 지금 잠겨 있거나 곧(2시간 안) 잠금이 시작되는가. 강도 설정을 못 끄게 막는 데 쓴다. */
     fun nearLock(ctx: Context): Boolean {
+        if (Store.long("relaxPass") > System.currentTimeMillis()) return false   // 친구가 허락함
         if (phone(ctx) != null || manualRemain(ctx) > 0) return true
         val now = System.currentTimeMillis()
         for (s in Store.schedules()) {
@@ -235,6 +240,14 @@ object Engine {
             if (n - now < NEAR_MS) return true
         }
         return false
+    }
+
+    /** 친구가 승인한 폰 잠금 해제. 패널티는 없다. */
+    fun releaseByFriend(ctx: Context) {
+        val now = System.currentTimeMillis()
+        val p = phone(ctx) ?: return
+        if (manualRemain(ctx) > 0 && Store.str("lockKind") == "phone") Store.put("lockEndW", 0L)
+        Store.put("ignoreUntil", now + p.remainMs)
     }
 
     // ---------- 비상 해제 ----------
@@ -272,6 +285,11 @@ object Promises {
         }
     }
 
+    /** 친구가 늘려 준 오늘의 추가 한도(시간이면 분, 횟수면 번). */
+    fun bonus(p: Promise, day: String = Store.dayKey()): Int = Store.int("bonus_${day}_${p.pkg}")
+
+    fun limitOf(p: Promise, day: String = Store.dayKey()): Int = p.limit + bonus(p, day)
+
     fun used(p: Promise, day: String = Store.dayKey()): Int =
         if (p.unit == "time") (Store.useSec(day, p.pkg) / 60).toInt() else Store.opens(day, p.pkg)
 
@@ -284,8 +302,8 @@ object Promises {
             if (p.lastEval == today) p
             else {
                 changed = true
-                val kept = if (p.unit == "time") Store.useSec(y, p.pkg) <= p.limit * 60L
-                else Store.opens(y, p.pkg) <= p.limit
+                val kept = if (p.unit == "time") Store.useSec(y, p.pkg) <= limitOf(p, y) * 60L
+                else Store.opens(y, p.pkg) <= limitOf(p, y)
                 p.copy(lastEval = today, streak = if (kept) p.streak + 1 else 0)
             }
         }

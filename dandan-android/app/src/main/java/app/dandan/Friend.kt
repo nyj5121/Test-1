@@ -1,0 +1,302 @@
+package app.dandan
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.util.Base64
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.net.URLEncoder
+import java.security.KeyFactory
+import java.security.SecureRandom
+import java.security.Signature
+import java.security.spec.X509EncodedKeySpec
+
+/**
+ * 친구 승인. 서버 없이 서명으로 동작한다.
+ *  - 친구가 링크 페이지에서 열쇠 한 쌍을 만들고, 공개 열쇠(연결 코드)만 나에게 준다.
+ *  - 나는 요청 링크를 친구에게 보내고, 친구가 승인하면 나오는 서명 코드를 받아 붙여넣는다.
+ *  - 앱은 공개 열쇠로 서명을 검증한다. 친구의 개인 열쇠 없이는 승인 코드를 만들 수 없다.
+ */
+object Friend {
+    const val BASE_DEFAULT = "https://nyj5121.github.io/Test-1/friend.html"
+
+    val SCOPES = listOf(
+        Triple("promise_extra", "약속 앱 시간 추가", "약속한 앱을 더 쓰고 싶을 때, 내가 정하지 않고 친구가 정해요."),
+        Triple("app_unlock", "앱 잠금 해제", "잠긴 앱을 잠깐 열고 싶을 때 친구에게 허락받아요."),
+        Triple("phone_unlock", "폰 잠금 중간 해제", "폰 잠금을 끝나기 전에 풀려면 친구 승인이 필요해요. (패널티 없음)"),
+        Triple("sched_edit", "예약 수정·삭제·끄기", "'예약 잠금 전 수정 방지'로 막힌 예약을 고치려면 친구 승인이 필요해요."),
+        Triple("relax", "잠금 강도 설정 끄기", "곧 잠기는데 철벽 모드·앱 삭제 방지 등을 끄려면 친구 승인이 필요해요.")
+    )
+
+    fun base(): String = Store.str("friendBase", BASE_DEFAULT)
+    fun registered(): Boolean = Store.str("friendPk").isNotBlank()
+    fun name(): String = Store.str("friendName", "친구")
+    fun myName(): String = Store.str("myName", "나")
+    fun scopeOn(s: String): Boolean = registered() && Store.bool("fs_$s")
+
+    private const val F = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+
+    fun enc(b: ByteArray): String = Base64.encodeToString(b, F)
+
+    fun dec(s: String): ByteArray {
+        var t = s.filter { !it.isWhitespace() }.replace('+', '-').replace('/', '_')
+        while (t.length % 4 != 0) t += "="
+        return Base64.decode(t, Base64.URL_SAFE)
+    }
+
+    private fun clean(s: String) = s.replace("|", " ").replace("\n", " ").trim().take(40)
+
+    /** 같은 요청이 아직 유효하면 그대로 쓰고(친구가 이미 받은 링크가 무효가 되지 않게), 아니면 새로 만든다. */
+    fun pendingOrNew(kind: String, label: String, param: String): String {
+        val now = System.currentTimeMillis() / 1000
+        val cur = Store.str("friendPending")
+        if (cur.isNotBlank()) {
+            val p = cur.split("|")
+            if (p.size >= 7 && p[1] == kind && p[2] == clean(label) && p[3] == param &&
+                (p[5].toLongOrNull() ?: 0L) > now + 60
+            ) return cur
+        }
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val req = listOf(
+            "d1", kind, clean(label), param, enc(nonce), (now + 30 * 60).toString(), clean(myName())
+        ).joinToString("|")
+        Store.put("friendPending", req)
+        return req
+    }
+
+    fun summary(req: String): String {
+        val p = req.split("|")
+        if (p.size < 7) return "요청"
+        val label = p[2]
+        val param = p[3]
+        return when (p[1]) {
+            "promise_extra" -> "\"$label\" ${param}분 더 쓰기"
+            "app_unlock" -> "\"$label\" 앱 잠금을 ${param}분 동안 풀기"
+            "phone_unlock" -> "폰 잠금 중간 해제"
+            "sched_edit" -> "잠금 예약($label) 고치기·지우기"
+            "relax" -> "잠금 강도 설정 끄기"
+            else -> label
+        }
+    }
+
+    fun link(req: String): String = base() + "#r=" + enc(req.toByteArray(Charsets.UTF_8))
+
+    fun inviteLink(): String = base() + "#hello=1&from=" + URLEncoder.encode(myName(), "UTF-8")
+
+    fun requestMessage(req: String): String =
+        "[단단] ${myName()}의 요청\n${summary(req)}\n\n승인하려면 링크를 열어 주세요 ↓\n${link(req)}\n\n" +
+            "(승인하면 나오는 코드를 나한테 보내 줘)"
+
+    fun register(name: String, pkCode: String): Boolean = try {
+        val bytes = dec(pkCode)
+        KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(bytes))
+        Store.put("friendPk", enc(bytes))
+        Store.put("friendName", name.trim().ifBlank { "친구" })
+        true
+    } catch (e: Exception) { false }
+
+    fun unregister() {
+        Store.put("friendPk", "")
+        Store.put("friendPending", "")
+        SCOPES.forEach { Store.put("fs_${it.first}", false) }
+    }
+
+    /** 웹의 서명은 r||s 64바이트이고, 자바는 DER를 기대해서 바꿔 준다. */
+    fun rawToDer(raw: ByteArray): ByteArray {
+        fun part(x: ByteArray): ByteArray {
+            var b = x.dropWhile { it == 0.toByte() }.toByteArray()
+            if (b.isEmpty()) b = byteArrayOf(0)
+            if (b[0] < 0) b = byteArrayOf(0) + b
+            return byteArrayOf(0x02, b.size.toByte()) + b
+        }
+        val r = part(raw.copyOfRange(0, 32))
+        val s = part(raw.copyOfRange(32, 64))
+        return byteArrayOf(0x30, (r.size + s.size).toByte()) + r + s
+    }
+
+    fun verifyRaw(pkB64: String, message: String, sigB64: String): Boolean = try {
+        val sig = dec(sigB64)
+        if (sig.size != 64) false
+        else {
+            val pk = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(dec(pkB64)))
+            val v = Signature.getInstance("SHA256withECDSA")
+            v.initVerify(pk)
+            v.update(message.toByteArray(Charsets.UTF_8))
+            v.verify(rawToDer(sig))
+        }
+    } catch (e: Exception) { false }
+
+    /** 승인 코드가 지금 걸어 둔 요청에 대한 친구의 서명이면 true. 한 번 쓰면 요청은 폐기된다. */
+    fun verify(code: String): Boolean {
+        val pending = Store.str("friendPending")
+        if (pending.isBlank()) return false
+        val p = pending.split("|")
+        val exp = p.getOrNull(5)?.toLongOrNull() ?: return false
+        if (System.currentTimeMillis() / 1000 > exp) return false
+        val ok = verifyRaw(Store.str("friendPk"), pending, code)
+        if (ok) Store.put("friendPending", "")
+        return ok
+    }
+}
+
+private fun readClipboard(ctx: Context): String = try {
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val c = cm.primaryClip
+    if (c != null && c.itemCount > 0) c.getItemAt(0).coerceToText(ctx).toString() else ""
+} catch (e: Exception) { "" }
+
+private fun copyText(ctx: Context, text: String) {
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("dandan", text))
+}
+
+private fun shareText(ctx: Context, text: String) {
+    try {
+        ctx.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
+                "친구에게 보내기"
+            )
+        )
+    } catch (e: Exception) { toast(ctx, "공유할 수 없어요") }
+}
+
+/** 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창. allowShare=false면 링크 복사만 보여 준다(폰 잠금 중). */
+@Composable
+fun FriendRequestDialog(
+    kind: String,
+    label: String,
+    param: String,
+    allowShare: Boolean = true,
+    onDismiss: () -> Unit,
+    onApproved: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val req = remember { Friend.pendingOrNew(kind, label, param) }
+    var code by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf("") }
+    val msg = remember(req) { Friend.requestMessage(req) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${Friend.name()}에게 요청") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(Friend.summary(req), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Spacer(Modifier.height(10.dp))
+                Text("1. 요청 링크를 친구에게 보내세요.", fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
+                    if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
+                }
+                if (!allowShare) {
+                    Text(
+                        "잠금 중에는 허용 앱(예: 카카오톡)에서 붙여넣어 보내세요.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("2. 친구가 승인하고 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
+                OutlinedTextField(
+                    value = code, onValueChange = { code = it; err = "" },
+                    modifier = Modifier.fillMaxWidth(), maxLines = 4
+                )
+                TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                Text(
+                    "30분 안에 승인받아야 해요.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = code.isNotBlank(),
+                onClick = {
+                    if (Friend.verify(code)) { onDismiss(); onApproved() }
+                    else err = "코드가 맞지 않거나 만료됐어요."
+                }
+            ) { Text("확인") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
+}
+
+/** 친구 등록 창: 내 이름, 초대 링크 보내기, 친구가 준 연결 코드 붙여넣기. */
+@Composable
+fun FriendSetupDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    var me by remember { mutableStateOf(Store.str("myName")) }
+    var friend by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("친구 등록") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("1. 이름을 정하고 친구에게 초대 링크를 보내세요.", fontSize = 13.sp)
+                OutlinedTextField(me, { me = it }, label = { Text("내 이름 (친구에게 보여요)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(friend, { friend = it }, label = { Text("친구 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        Store.put("myName", me.trim().ifBlank { "나" })
+                        copyText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'를 누르고, 나온 연결 코드를 나한테 보내 줘.\n${Friend.inviteLink()}")
+                        toast(ctx, "복사했어요")
+                    }) { Text("링크 복사") }
+                    OutlinedButton(onClick = {
+                        Store.put("myName", me.trim().ifBlank { "나" })
+                        shareText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'를 누르고, 나온 연결 코드를 나한테 보내 줘.\n${Friend.inviteLink()}")
+                    }) { Text("공유하기") }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("2. 친구가 보내 준 연결 코드를 붙여넣으세요.", fontSize = 13.sp)
+                OutlinedTextField(code, { code = it; err = "" }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "친구는 크롬이나 삼성 인터넷 같은 일반 브라우저로 링크를 열어야 해요. 카카오톡 안에서 열었다면 '다른 브라우저로 열기'를 쓰세요.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = code.isNotBlank() && friend.isNotBlank(),
+                onClick = {
+                    Store.put("myName", me.trim().ifBlank { "나" })
+                    if (Friend.register(friend, code)) { toast(ctx, "친구를 등록했어요"); onDismiss() }
+                    else err = "연결 코드가 올바르지 않아요."
+                }
+            ) { Text("등록") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
+}

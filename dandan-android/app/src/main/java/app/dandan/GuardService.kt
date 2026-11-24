@@ -256,10 +256,11 @@ class GuardService : AccessibilityService() {
         val pr = Store.promises().firstOrNull { it.pkg == pkg } ?: return
         if (!Promises.applies(pr)) return
         val today = Store.dayKey()
-        val timeOver = pr.unit == "time" && Store.useSec(today, pkg) >= pr.limit * 60L
+        val limit = Promises.limitOf(pr)
+        val timeOver = pr.unit == "time" && Store.useSec(today, pkg) >= limit * 60L
         if (timeOver) { showGate(pkg, "limit"); return }
         if (Store.long("grant_$pkg") > SystemClock.elapsedRealtime()) return
-        val countOver = pr.unit == "count" && Store.opens(today, pkg) >= pr.limit
+        val countOver = pr.unit == "count" && Store.opens(today, pkg) >= limit
         showGate(pkg, if (countOver) "limit" else "intervene")
     }
 
