@@ -6,6 +6,7 @@ import android.provider.Settings
 import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 
 class PhoneLock(
     val remainMs: Long,
@@ -39,6 +40,19 @@ object Fmt {
 
     fun clock(min: Int): String = String.format(Locale.US, "%02d:%02d", min / 60, min % 60)
 
+    /** 긴 시간을 "3일 4시간" 같이 보여 준다. */
+    fun span(ms: Long): String {
+        val m = ms / 60_000
+        val d = m / 1440
+        val h = m % 1440 / 60
+        val mm = m % 60
+        return when {
+            d > 0 -> "${d}일 ${h}시간"
+            h > 0 -> "${h}시간 ${mm}분"
+            else -> "${mm}분"
+        }
+    }
+
     fun days(mask: Int): String = when {
         mask == 0 -> "한 번만"
         mask == 127 -> "매일"
@@ -50,9 +64,16 @@ object Fmt {
 object Engine {
     const val NEAR_MS = 2 * 3600_000L
 
-    fun bootCount(ctx: Context): Int = try {
-        Settings.Global.getInt(ctx.contentResolver, Settings.Global.BOOT_COUNT, -1)
-    } catch (e: Exception) { -1 }
+    private var bootCache = Int.MIN_VALUE
+
+    /** 부팅 횟수. 재부팅하면 프로세스도 새로 뜨므로 한 번 읽어 두고 재사용한다. */
+    fun bootCount(ctx: Context): Int {
+        if (bootCache != Int.MIN_VALUE) return bootCache
+        bootCache = try {
+            Settings.Global.getInt(ctx.contentResolver, Settings.Global.BOOT_COUNT, -1)
+        } catch (e: Exception) { -1 }
+        return bootCache
+    }
 
     // ---------- 즉시 잠금 ----------
     fun manualRemain(ctx: Context): Long {
@@ -231,6 +252,7 @@ object Engine {
     /** 지금 잠겨 있거나 곧(2시간 안) 잠금이 시작되는가. 강도 설정을 못 끄게 막는 데 쓴다. */
     fun nearLock(ctx: Context): Boolean {
         if (Store.long("relaxPass") > System.currentTimeMillis()) return false   // 친구가 허락함
+        if (Dumb.active(ctx)) return true
         if (phone(ctx) != null || manualRemain(ctx) > 0) return true
         val now = System.currentTimeMillis()
         for (s in Store.schedules()) {
@@ -308,5 +330,136 @@ object Promises {
             }
         }
         if (changed) Store.savePromises(out)
+    }
+}
+
+/** 바보폰 자유 시간 한 칸. days: bit0=월 ... bit6=일. */
+data class FreeWin(val s: Int, val e: Int, val days: Int)
+
+/**
+ * 바보폰을 하루 종일 켜 두고, 자유 시간에만 벗어난다.
+ * 자유 시간은 "세션"으로 다룬다: 시작할 때 남은 시간을 부팅 후 경과시간(elapsedRealtime)으로 못 박아서
+ * 나중에 폰 시계를 바꿔도 늘어나지 않는다. 같은 시간대는 하루에 한 번만 시작된다.
+ */
+object Dumb {
+    val ALWAYS_BLOCKED = setOf(
+        "com.android.settings",
+        "com.google.android.packageinstaller",
+        "com.android.packageinstaller",
+        "com.samsung.android.packageinstaller"
+    )
+
+    private var lastOff = 0L
+    private var lastBoot = -2
+
+    fun parse(str: String): List<FreeWin> {
+        if (str.isBlank()) return emptyList()
+        val out = ArrayList<FreeWin>()
+        for (item in str.split(",")) {
+            try {
+                val (range, mask) = item.split(":")
+                val (a, b) = range.split("-")
+                val s = a.substring(0, 2).toInt() * 60 + a.substring(2, 4).toInt()
+                val e = b.substring(0, 2).toInt() * 60 + b.substring(2, 4).toInt()
+                val d = mask.toInt() and 127
+                if (s in 0..1439 && e in 0..1439 && s != e && d != 0) out.add(FreeWin(s, e, d))
+            } catch (ex: Exception) { }
+        }
+        return out.take(8)
+    }
+
+    fun encode(l: List<FreeWin>): String = l.joinToString(",") {
+        String.format(Locale.US, "%02d%02d-%02d%02d:%d", it.s / 60, it.s % 60, it.e / 60, it.e % 60, it.days)
+    }
+
+    fun friendControlled(): Boolean = Friend.scopeOn("dumb_policy")
+
+    /** 지금 유효한 자유 시간 목록. 친구가 정하는 모드에서는 정책이 만료되면 비어 있다(=하루 종일 바보폰). */
+    fun windows(): List<FreeWin> {
+        if (friendControlled() && Store.long("dumbExp") <= System.currentTimeMillis() / 1000) return emptyList()
+        return parse(Store.str("dumbWins"))
+    }
+
+    private fun asSched(w: FreeWin) =
+        Schedule("dumb", w.s, w.e, w.days, true, true, "dumb", emptySet(), 0L)
+
+    fun nextFreeStart(now: Long): Long? =
+        windows().mapNotNull { Engine.nextStart(asSched(it), now) }.minOrNull()
+
+    fun freeRemainMs(ctx: Context): Long {
+        val el = SystemClock.elapsedRealtime()
+        val same = Store.int("dfBoot", -2) == Engine.bootCount(ctx)
+        return if (same && Store.long("dfEndE") > el) Store.long("dfEndE") - el else 0L
+    }
+
+    fun free(ctx: Context): Boolean = freeRemainMs(ctx) > 0
+
+    /** 바보폰이 켜져 있고 지금이 자유 시간이 아니다. */
+    fun active(ctx: Context): Boolean = Store.dumbOn && !free(ctx)
+
+    fun strict(ctx: Context): Boolean =
+        Store.int("dsBoot", -2) == Engine.bootCount(ctx) && Store.long("dsEndE") > SystemClock.elapsedRealtime()
+
+    // ---------- 바보폰 기간 ----------
+    /** 켤 때 정한 기간. days가 0이면 기간 없음. 부팅 후 경과시간으로 못 박아서 시계를 바꿔도 줄지 않는다. */
+    fun startPeriod(ctx: Context, days: Int) {
+        if (days <= 0) { Store.put("dumbEndW", 0L); return }
+        val ms = days * 86_400_000L
+        Store.put("dumbEndW", System.currentTimeMillis() + ms)
+        Store.put("dumbEndE", SystemClock.elapsedRealtime() + ms)
+        Store.put("dumbBoot", Engine.bootCount(ctx))
+    }
+
+    fun periodSet(): Boolean = Store.long("dumbEndW") != 0L
+
+    fun periodRemainMs(ctx: Context): Long {
+        val endW = Store.long("dumbEndW")
+        if (endW == 0L) return 0L
+        val boot = Engine.bootCount(ctx)
+        val same = boot != -1 && Store.int("dumbBoot", -2) == boot
+        val rem = if (same) Store.long("dumbEndE") - SystemClock.elapsedRealtime() else endW - System.currentTimeMillis()
+        return maxOf(0L, rem)
+    }
+
+    fun startSession(ctx: Context, ms: Long) {
+        val el = SystemClock.elapsedRealtime()
+        val boot = Engine.bootCount(ctx)
+        val cur = if (Store.int("dfBoot", -2) == boot) Store.long("dfEndE") else 0L
+        Store.put("dfEndE", maxOf(cur, el + ms))
+        Store.put("dfBoot", boot)
+    }
+
+    /** 1초마다: 시계 조작 감지, 자유 시간 시작 판단. */
+    fun tick(ctx: Context) {
+        val el = SystemClock.elapsedRealtime()
+        val wall = System.currentTimeMillis()
+        val boot = Engine.bootCount(ctx)
+        val off = wall - el
+        if (lastBoot == boot && lastOff != 0L && abs(off - lastOff) > 120_000L) {
+            // 시계가 갑자기 바뀜 → 6시간 동안 새 자유 시간을 시작하지 않는다
+            Store.put("dsEndE", el + 6 * 3600_000L)
+            Store.put("dsBoot", boot)
+        }
+        lastOff = off
+        lastBoot = boot
+
+        // 정한 기간이 끝나면 바보폰이 저절로 꺼진다
+        if (Store.dumbOn && periodSet() && periodRemainMs(ctx) <= 0L) {
+            Store.dumbOn = false
+            Store.put("dumbEndW", 0L)
+            Notifier.post(ctx, 7001, "바보폰이 끝났어요", "정한 기간이 지나서 바보폰 모드가 꺼졌어요.")
+            return
+        }
+
+        if (!Store.dumbOn || free(ctx) || strict(ctx)) return
+        val ws = windows()
+        for ((i, w) in ws.withIndex()) {
+            val win = Engine.schedWindow(asSched(w), wall) ?: continue
+            val key = "dUsed_${Store.dayKey(win.first)}_${i}_${w.s}"
+            if (Store.bool(key)) continue
+            Store.put(key, true)
+            startSession(ctx, win.second - wall)
+            return
+        }
     }
 }

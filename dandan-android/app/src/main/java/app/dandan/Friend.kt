@@ -50,8 +50,56 @@ object Friend {
         Triple("app_unlock", "앱 잠금 해제", "잠긴 앱을 잠깐 열고 싶을 때 친구에게 허락받아요."),
         Triple("phone_unlock", "폰 잠금 중간 해제", "폰 잠금을 끝나기 전에 풀려면 친구 승인이 필요해요. (패널티 없음)"),
         Triple("sched_edit", "예약 수정·삭제·끄기", "'예약 잠금 전 수정 방지'로 막힌 예약을 고치려면 친구 승인이 필요해요."),
-        Triple("relax", "잠금 강도 설정 끄기", "곧 잠기는데 철벽 모드·앱 삭제 방지 등을 끄려면 친구 승인이 필요해요.")
+        Triple("relax", "잠금 강도 설정 끄기", "곧 잠기는데 철벽 모드·앱 삭제 방지 등을 끄려면 친구 승인이 필요해요."),
+        Triple("dumb_policy", "바보폰 자유 시간을 친구가 정하기", "바보폰에서 벗어날 수 있는 시간대를 친구만 정해요. 바보폰을 끄는 것도 친구 승인이 필요해요."),
+        Triple("dumb_release", "바보폰 해제를 친구 승인으로", "바보폰을 끄려면(정한 기간이 남았어도) 친구 승인이 필요해요.")
     )
+
+    /** 옵션을 켠다. 바보폰 자유 시간을 친구가 정하게 하면 내가 정해 둔 시간대는 지워진다. */
+    fun enableScope(key: String) {
+        Store.put("fs_$key", true)
+        if (key == "dumb_policy") {
+            Store.put("dumbWins", "")
+            Store.put("dumbExp", 0L)
+        }
+    }
+
+    /** 이 앱 설치마다 다른 짧은 번호. 친구가 만든 정책이 다른 폰에 쓰이지 않게 묶는 데 쓴다. */
+    fun deviceId(): String {
+        val cur = Store.str("devId")
+        if (cur.isNotBlank()) return cur
+        val chars = "abcdefghjkmnpqrstuvwxyz23456789"
+        val r = SecureRandom()
+        val id = (1..8).map { chars[r.nextInt(chars.length)] }.joinToString("")
+        Store.put("devId", id)
+        return id
+    }
+
+    /** 친구가 자유 시간을 정하는 페이지로 가는 링크. 지금 정책을 함께 실어 보낸다. */
+    fun policyLink(): String {
+        val q = listOf("q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString())
+            .joinToString("|")
+        return base() + "#q=" + enc(q.toByteArray(Charsets.UTF_8))
+    }
+
+    /** 친구가 만든 정책 코드("정책.서명")를 검증해 적용한다. 성공하면 null, 실패하면 이유를 돌려준다. */
+    fun applyPolicy(code: String): String? {
+        val parts = code.trim().split(".")
+        if (parts.size != 2) return "코드 형식이 올바르지 않아요."
+        val policy = try { String(dec(parts[0]), Charsets.UTF_8) } catch (e: Exception) { return "코드를 읽을 수 없어요." }
+        if (!verifyRaw(Store.str("friendPk"), policy, parts[1])) return "친구가 만든 코드가 아니에요."
+        val p = policy.split("|")
+        if (p.size < 6 || p[0] != "p1") return "정책 형식이 올바르지 않아요."
+        if (p[1] != deviceId()) return "이 폰용 코드가 아니에요."
+        val ver = p[2].toLongOrNull() ?: return "정책 형식이 올바르지 않아요."
+        val exp = p[3].toLongOrNull() ?: return "정책 형식이 올바르지 않아요."
+        if (ver <= Store.long("dumbVer")) return "이미 적용했거나 더 오래된 코드예요."
+        if (exp <= System.currentTimeMillis() / 1000) return "만료된 코드예요."
+        Store.put("dumbWins", Dumb.encode(Dumb.parse(p[4])))
+        Store.put("dumbExp", exp)
+        Store.put("dumbVer", ver)
+        return null
+    }
 
     fun base(): String = Store.str("friendBase", BASE_DEFAULT)
     fun registered(): Boolean = Store.str("friendPk").isNotBlank()
@@ -100,6 +148,7 @@ object Friend {
             "phone_unlock" -> "폰 잠금 중간 해제"
             "sched_edit" -> "잠금 예약($label) 고치기·지우기"
             "relax" -> "잠금 강도 설정 끄기"
+            "dumb_free" -> "바보폰에서 ${param}분 벗어나기"
             else -> label
         }
     }
@@ -164,18 +213,18 @@ object Friend {
     }
 }
 
-private fun readClipboard(ctx: Context): String = try {
+internal fun readClipboard(ctx: Context): String = try {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val c = cm.primaryClip
     if (c != null && c.itemCount > 0) c.getItemAt(0).coerceToText(ctx).toString() else ""
 } catch (e: Exception) { "" }
 
-private fun copyText(ctx: Context, text: String) {
+internal fun copyText(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("dandan", text))
 }
 
-private fun shareText(ctx: Context, text: String) {
+internal fun shareText(ctx: Context, text: String) {
     try {
         ctx.startActivity(
             Intent.createChooser(

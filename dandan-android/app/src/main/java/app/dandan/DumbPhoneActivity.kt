@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -35,7 +36,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** 바보폰 모드의 홈 화면. 시계와 꼭 필요한 앱만 글자로 보여준다. */
+/** 바보폰 모드의 홈 화면. 시계와 꼭 필요한 앱만 글자로 보여준다. 자유 시간이 되면 저절로 닫힌다. */
 class DumbPhoneActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,15 +54,18 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
     val ctx = LocalContext.current
     Store.rev.intValue
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(10_000) } }
+    var ask by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+    if (!preview && !Dumb.active(ctx)) LaunchedEffect(now) { onClose() }
 
     val rows = remember(Store.dumbApps) {
         val l = ArrayList<String>()
         Apps.dialerPkg(ctx)?.let { l.add(it) }
         Apps.smsPkg(ctx)?.let { if (it !in l) l.add(it) }
         Store.dumbApps.forEach { if (it !in l) l.add(it) }
-        l.toList()
+        l.filter { it !in Dumb.ALWAYS_BLOCKED }
     }
+    val next = Dumb.nextFreeStart(now)
 
     Column(Modifier.fillMaxSize().background(Color.Black).padding(horizontal = 32.dp, vertical = 56.dp)) {
         Text(
@@ -72,7 +76,12 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
             SimpleDateFormat("a h:mm", Locale.KOREA).format(Date(now)),
             color = Color.White, fontSize = 52.sp, fontWeight = FontWeight.Light
         )
-        Spacer(Modifier.height(40.dp))
+        Text(
+            if (next != null) "다음 자유 시간 " + SimpleDateFormat("E a h:mm", Locale.KOREA).format(Date(next))
+            else "오늘은 자유 시간이 없어요",
+            color = Color.White.copy(alpha = 0.45f), fontSize = 13.sp
+        )
+        Spacer(Modifier.height(36.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
             items(rows) { p ->
                 Text(
@@ -80,6 +89,12 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().clickable { Apps.open(ctx, p) }.padding(vertical = 10.dp)
                 )
             }
+        }
+        if (Dumb.friendControlled()) {
+            Text(
+                "${Friend.name()}에게 자유 시간 요청", color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp,
+                modifier = Modifier.clickable { ask = true }.padding(vertical = 8.dp)
+            )
         }
         Text(
             "단단 설정", color = Color.White.copy(alpha = 0.45f), fontSize = 15.sp,
@@ -89,4 +104,5 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
         )
         if (preview) TextButton(onClick = onClose) { Text("미리보기 닫기") }
     }
+    if (ask) FreeAskFlow { ask = false }
 }

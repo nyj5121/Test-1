@@ -180,7 +180,7 @@ fun SettingsTab(goPerm: () -> Unit) {
                     Switch(
                         checked = Store.bool("fs_$key"),
                         onCheckedChange = { want ->
-                            if (want) Store.put("fs_$key", true)
+                            if (want) Friend.enableScope(key)
                             else cfgAsk = Pair<String, () -> Unit>("옵션 끄기: $title", { Store.put("fs_$key", false) })
                         }
                     )

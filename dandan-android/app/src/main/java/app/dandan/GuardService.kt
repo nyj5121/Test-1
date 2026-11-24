@@ -118,6 +118,7 @@ class GuardService : AccessibilityService() {
             } catch (e: Exception) { }
         }
         Engine.cleanupOnce()
+        Dumb.tick(this)
 
         val phone = Engine.phone(this)
         val prev = lastPhone
@@ -139,6 +140,7 @@ class GuardService : AccessibilityService() {
         if (phone != null) {
             if (fg != packageName && !allowedDuring(fg)) goLock()
         } else {
+            if (Dumb.active(this) && fg != packageName && !dumbAllowed(fg)) { openDumb(); return }
             tickPromise(fg)
         }
     }
@@ -206,7 +208,7 @@ class GuardService : AccessibilityService() {
             return
         }
 
-        if (Store.dumbOn && pkg in homePkgs) {
+        if (Dumb.active(this) && (pkg in homePkgs || !dumbAllowed(pkg))) {
             openDumb()
             return
         }
@@ -241,7 +243,23 @@ class GuardService : AccessibilityService() {
         }
     }
 
+    /** 바보폰 시간에 열 수 있는 앱: 전화·문자·고른 앱·단단. 설정 앱과 앱 설치/삭제 화면은 고른 앱이어도 막는다. */
+    private fun dumbAllowed(pkg: String): Boolean {
+        if (pkg in Dumb.ALWAYS_BLOCKED) return false
+        if (pkg == packageName || pkg in imePkgs) return true
+        if (pkg in Store.dumbApps) return true
+        if (pkg == dialerPkg || pkg == smsPkg) return true
+        if (pkg.contains("incallui") || pkg.contains("telecom") || pkg.contains("emergency") || pkg == "com.android.phone") return true
+        if (pkg.contains("permissioncontroller")) return true
+        return false
+    }
+
+    private var lastDumbAt = 0L
+
     private fun openDumb() {
+        val n = SystemClock.elapsedRealtime()
+        if (n - lastDumbAt < 400) return
+        lastDumbAt = n
         try {
             startActivity(
                 Intent(this, DumbPhoneActivity::class.java)

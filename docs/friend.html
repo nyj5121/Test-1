@@ -23,6 +23,12 @@
   textarea { width: 100%; box-sizing: border-box; min-height: 96px; border-radius: 12px; border: 1px solid #3a4054;
              background: #0f1115; color: #eceef3; padding: 10px; font: 13px/1.4 ui-monospace, monospace; word-break: break-all; }
   label.chk { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; font-size: 15px; }
+  input[type=time], select { font: inherit; background: #0f1115; color: #eceef3; border: 1px solid #3a4054;
+                             border-radius: 10px; padding: 8px 10px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .days { display: flex; gap: 6px; margin: 10px 0 4px; }
+  button.day { width: 38px; height: 38px; padding: 0; margin: 0; border-radius: 50%; background: #232733; color: #a9afc0; }
+  button.day.on { background: #8c9bff; color: #0b0e2a; }
   details { margin-top: 18px; color: #a9afc0; font-size: 14px; }
   summary { cursor: pointer; }
 </style>
@@ -156,12 +162,84 @@
     }
   }
 
+  function renderPolicy(qParam) {
+    var text;
+    try { text = C.dec.decode(C.b64u.dec(qParam)); } catch (e) { text = null; }
+    var q = text && C.parseQ(text);
+    if (!q) { app.append(el('div', { class: 'card bad' }, '요청 링크가 올바르지 않아요.')); return; }
+    var who = q.from || '친구';
+    app.append(el('div', { class: 'card' },
+      el('h2', null, '바보폰 자유 시간 정하기'),
+      el('p', null, who + '이(가) 바보폰에서 벗어날 수 있는 시간을 정해 달래요. 여기서 정한 시간대에만 폰을 평소처럼 쓸 수 있고, 그 밖의 시간에는 하루 종일 바보폰이에요. 유효기간이 끝나면 자유 시간이 모두 사라져요.')));
+    if (!loadKey()) {
+      app.append(el('div', { class: 'card warn' }, '아직 이 브라우저에 친구 연결이 없어요. 먼저 상대의 초대 링크로 "친구 되어 주기"를 해야 정할 수 있어요. 예전에 연결했다면 아래 백업으로 복원하세요.'), backupBox());
+      return;
+    }
+
+    var rows = C.parseWins(q.wins);
+    var list = el('div');
+    function draw() {
+      list.replaceChildren();
+      if (!rows.length) list.append(el('p', { class: 'sub' }, '자유 시간이 없어요. 시간대를 추가하세요. 비워 두면 하루 종일 바보폰이에요.'));
+      rows.forEach(function (r, idx) {
+        var s = el('input', { type: 'time', value: r.s });
+        s.onchange = function () { r.s = s.value; };
+        var e = el('input', { type: 'time', value: r.e });
+        e.onchange = function () { r.e = e.value; };
+        var days = el('div', { class: 'days' });
+        ['월', '화', '수', '목', '금', '토', '일'].forEach(function (d, i) {
+          days.append(el('button', { class: ((r.d >> i) & 1) ? 'day on' : 'day', onclick: function () { r.d ^= (1 << i); draw(); } }, d));
+        });
+        var del = el('button', { class: 'ghost', onclick: function () { rows.splice(idx, 1); draw(); } }, '삭제');
+        list.append(el('div', { class: 'card' }, el('div', { class: 'row' }, s, el('span', null, '~'), e), days, del));
+      });
+    }
+    draw();
+
+    var add = el('button', { class: 'ghost', onclick: function () {
+      if (rows.length >= 8) return;
+      rows.push({ s: '20:00', e: '21:00', d: 127 }); draw();
+    } }, '+ 시간대 추가');
+
+    var sel = el('select');
+    [['1', '1일'], ['3', '3일'], ['7', '7일'], ['14', '14일'], ['30', '30일']].forEach(function (o) {
+      var op = el('option', { value: o[0] }, o[1]); if (o[0] === '7') op.selected = true; sel.append(op);
+    });
+    var chk = el('input', { type: 'checkbox' });
+    var go = el('button', { onclick: issue }, '이 정책으로 승인');
+    go.disabled = true;
+    chk.onchange = function () { go.disabled = !chk.checked; };
+    var out = el('div');
+
+    app.append(list, add,
+      el('div', { class: 'card' }, el('h2', null, '유효기간'), sel,
+        el('p', { class: 'sub' }, '이 기간이 지나면 자유 시간이 사라지고 하루 종일 바보폰이 돼요. 그 전에 다시 정해 주세요.')),
+      el('label', { class: 'chk' }, chk, el('span', null, '위 시간대로 ' + who + '의 자유 시간을 정해도 좋아요.')),
+      go, out);
+
+    async function issue() {
+      try {
+        var good = rows.filter(function (r) { return r.s && r.e && r.s !== r.e && (r.d & 127); });
+        var wins = C.encodeWins(good);
+        var ver = Math.floor(Date.now() / 1000);
+        var exp = ver + parseInt(sel.value, 10) * 86400;
+        var policy = ['p1', q.dev, ver, exp, wins, q.from].join('|');
+        var k = loadKey();
+        var code = await C.signPolicy(k.priv, policy);
+        out.replaceChildren(codeCard('정책 코드', code, '이 코드를 ' + who + '님에게 보내 주세요. 코드에는 시간대와 유효기간이 들어 있어요. 이 폰에서만 쓸 수 있고, 한 번 적용하면 더 오래된 코드는 쓸 수 없어요.'));
+        go.disabled = true;
+      } catch (e) { out.replaceChildren(el('div', { class: 'card bad' }, '코드를 만들 수 없어요.')); }
+    }
+  }
+
   function render() {
     app.replaceChildren(el('h1', null, '단단 친구 승인'));
     if (inApp()) app.append(el('div', { class: 'card warn' }, '앱 안의 브라우저에서는 연결 정보가 저장되지 않을 수 있어요. 오른쪽 위 메뉴에서 "다른 브라우저로 열기"를 눌러 크롬이나 삼성 인터넷으로 여세요.'));
     var q = new URLSearchParams(location.hash.replace(/^#/, ''));
     var r = q.get('r');
+    var pq = q.get('q');
     if (r) renderRequest(r);
+    else if (pq) renderPolicy(pq);
     else renderHome(q.has('hello') ? (q.get('from') || '') : null);
   }
 
