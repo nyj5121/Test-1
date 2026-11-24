@@ -16,6 +16,16 @@ android {
         versionName = "0.1"
     }
 
+    // 빌드 서버가 바뀌어도 서명이 같아야 업데이트가 덮어 설치된다 (개인용 디버그 빌드 전용 열쇠)
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
