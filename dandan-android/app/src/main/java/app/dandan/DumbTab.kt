@@ -312,16 +312,12 @@ fun FreeAskFlow(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var minutes by remember { mutableIntStateOf(0) }
     if (minutes == 0) {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text("몇 분 벗어날까요?") },
-            text = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(10, 30, 60).forEach { m -> OutlinedButton(onClick = { minutes = m }) { Text("${m}분") } }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+        MinutesDialog(
+            title = "몇 분 벗어날까요?",
+            note = "직접 정해요. 친구가 이 시간 그대로 승인해야 해요.",
+            confirmLabel = "친구에게 요청",
+            onPick = { minutes = it },
+            onDismiss = onDismiss
         )
     } else {
         FriendRequestDialog(

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.util.Base64
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,9 +23,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -233,6 +236,44 @@ internal fun shareText(ctx: Context, text: String) {
             )
         )
     } catch (e: Exception) { toast(ctx, "공유할 수 없어요") }
+}
+
+/** 분 단위를 직접 정하는 창. +버튼으로 쌓아 가고, 되돌리기로 0에서 다시 시작한다. */
+@Composable
+fun MinutesDialog(
+    title: String,
+    note: String,
+    confirmLabel: String,
+    max: Int = 480,
+    onPick: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var minutes by remember { mutableIntStateOf(0) }
+    val pad = PaddingValues(horizontal = 10.dp)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Text(if (minutes == 0) "0분" else Fmt.minutes(minutes), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                Text(note, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1, 5, 10).forEach { a ->
+                        OutlinedButton(onClick = { minutes = (minutes + a).coerceAtMost(max) }, contentPadding = pad) { Text("+$a") }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(30, 60, 120).forEach { a ->
+                        OutlinedButton(onClick = { minutes = (minutes + a).coerceAtMost(max) }, contentPadding = pad) { Text("+$a") }
+                    }
+                }
+                TextButton(onClick = { minutes = 0 }) { Text("되돌리기") }
+            }
+        },
+        confirmButton = { Button(enabled = minutes > 0, onClick = { onPick(minutes) }) { Text(confirmLabel) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+    )
 }
 
 /** 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창. allowShare=false면 링크 복사만 보여 준다(폰 잠금 중). */

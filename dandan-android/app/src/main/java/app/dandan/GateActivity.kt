@@ -97,6 +97,7 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
     val friendUnlock = Friend.scopeOn("app_unlock")
     var askMinutes by remember { mutableIntStateOf(0) }
     var askUnlock by remember { mutableIntStateOf(0) }
+    var pickUnlock by remember { mutableStateOf(false) }
 
     LaunchedEffect(stage) {
         if (stage == 1) {
@@ -119,12 +120,9 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
                 Spacer(Modifier.height(32.dp))
                 Button(onClick = onHome, Modifier.fillMaxWidth().height(54.dp)) { Text("홈으로") }
                 if (friendUnlock) {
-                    Spacer(Modifier.height(18.dp))
-                    Text("${Friend.name()}에게 잠깐 풀어 달라고 하기", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(10, 30, 60).forEach { m ->
-                            OutlinedButton(onClick = { askUnlock = m }) { Text("${m}분") }
-                        }
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedButton(onClick = { pickUnlock = true }, Modifier.fillMaxWidth().height(54.dp)) {
+                        Text("${Friend.name()}에게 잠깐 풀어 달라고 하기")
                     }
                 }
             }
@@ -247,6 +245,15 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
             kind = "promise_extra", label = label, param = askMinutes.toString(),
             onDismiss = { askMinutes = 0 },
             onApproved = { applyExtra(pkg, askMinutes, pr); askMinutes = 0; onDone() }
+        )
+    }
+    if (pickUnlock) {
+        MinutesDialog(
+            title = "몇 분 풀어 달라고 할까요?",
+            note = "직접 정해요. 친구가 이 시간 그대로 승인해야 해요.",
+            confirmLabel = "친구에게 요청",
+            onPick = { askUnlock = it; pickUnlock = false },
+            onDismiss = { pickUnlock = false }
         )
     }
     if (askUnlock > 0) {
