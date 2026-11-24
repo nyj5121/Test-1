@@ -4,6 +4,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.telephony.SmsManager
 import android.util.Base64
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,12 +19,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,10 +40,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.net.HttpURLConnection
+import java.net.URL
 import java.net.URLEncoder
+import org.json.JSONArray
+import org.json.JSONObject
 import java.security.KeyFactory
 import java.security.SecureRandom
 import java.security.Signature
@@ -150,6 +165,9 @@ object Friend {
     }
 
     fun reasonOf(req: String): String = req.split("|").getOrNull(7) ?: ""
+
+    /** 알림 제목: "예준의 요청: 인스타 30분 풀기" */
+    fun headline(req: String): String = "${myName()}의 요청: ${summary(req)}"
 
     fun summary(req: String): String {
         val p = req.split("|")
@@ -289,8 +307,8 @@ fun MinutesDialog(
 
 /**
  * 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창.
- * 먼저 사유를 적어야 요청 링크가 만들어진다. 사유는 서명 대상에 들어가서 친구에게 그대로 보인다.
- * allowShare=false면 링크 복사만 보여 준다(폰 잠금 중).
+ * 먼저 사유를 적어야 요청이 만들어진다. 사유는 서명 대상에 들어가서 친구에게 그대로 보인다.
+ * 요청을 만들면 설정한 알림(문자·푸시)이 자동으로 간다. allowShare=false면 공유 버튼을 숨긴다(폰 잠금 중).
  */
 @Composable
 fun FriendRequestDialog(
@@ -307,6 +325,7 @@ fun FriendRequestDialog(
     var reason by remember { mutableStateOf(existing?.let { Friend.reasonOf(it) } ?: "") }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
+    var sent by remember { mutableStateOf("") }
     val r = req
 
     AlertDialog(
@@ -325,23 +344,44 @@ fun FriendRequestDialog(
                 if (r == null) {
                     Button(
                         enabled = reason.trim().isNotEmpty(),
-                        onClick = { req = Friend.newRequest(kind, label, param, reason) }
+                        onClick = {
+                            val nr = Friend.newRequest(kind, label, param, reason)
+                            req = nr
+                            Notify.dispatch(ctx, Friend.headline(nr), "사유: " + Friend.reasonOf(nr), Friend.link(nr)) { sent = it }
+                        }
                     ) { Text("요청 만들기") }
+                    Text(
+                        if (Notify.any()) "만들면 ${Friend.name()}에게 자동으로 알림이 가요."
+                        else "자동 알림이 꺼져 있어요. 설정 → 친구 해제 → 알림 방법에서 켜면 자동으로 가요.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else {
                     val msg = Friend.requestMessage(r)
                     Spacer(Modifier.height(10.dp))
-                    Text("2. 요청 링크를 친구에게 보내세요.", fontSize = 13.sp)
+                    Text("2. 친구에게 요청이 가야 해요.", fontSize = 13.sp)
+                    if (sent.isNotBlank()) {
+                        Text(sent, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+                    } else if (!Notify.any()) {
+                        Text("자동 알림이 꺼져 있어요. 아래 버튼으로 직접 보내세요.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
-                        if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
+                        if (allowShare) OutlinedButton(onClick = { kakaoText(ctx, msg) }) { Text("카카오톡") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("다른 앱으로") }
+                        if (Notify.any()) OutlinedButton(onClick = {
+                            sent = "다시 보내는 중…"
+                            Notify.dispatch(ctx, Friend.headline(r), "사유: " + Friend.reasonOf(r), Friend.link(r)) { sent = it }
+                        }) { Text("알림 다시 보내기") }
                     }
                     if (!allowShare) {
                         Text(
-                            "잠금 중에는 허용 앱(예: 카카오톡)에서 붙여넣어 보내세요.",
+                            "잠금 중에는 허용 앱(예: 카카오톡)에서 붙여넣어 보낼 수 있어요.",
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = { req = null; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
+                    TextButton(onClick = { req = null; code = ""; err = ""; sent = "" }) { Text("사유 고쳐서 다시 만들기") }
                     Spacer(Modifier.height(6.dp))
                     Text("3. 친구가 승인하고 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
                     OutlinedTextField(
@@ -422,6 +462,205 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
                 }
             ) { Text("등록") }
         },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
+}
+
+/** 카카오톡으로 바로 보내기(받는 사람은 카톡 안에서 고른다). 카톡이 없으면 일반 공유 창을 쓴다. */
+internal fun kakaoText(ctx: Context, text: String) {
+    try {
+        ctx.startActivity(
+            Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+                .setPackage("com.kakao.talk")
+        )
+    } catch (e: Exception) { shareText(ctx, text) }
+}
+
+/** 친구에게 자동으로 알림을 보낸다: 문자(친구 번호)와 푸시(ntfy 주제). 둘 다 설정한 만큼 켜진다. */
+object Notify {
+    fun smsOn(): Boolean = Store.bool("notifySms") && Store.str("friendPhone").isNotBlank()
+    fun pushOn(): Boolean = Store.bool("notifyPush") && Store.str("friendTopic").isNotBlank()
+    fun any(): Boolean = smsOn() || pushOn()
+
+    fun newTopic(): String {
+        val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        val r = SecureRandom()
+        return "dandan-" + (1..20).map { chars[r.nextInt(chars.length)] }.joinToString("")
+    }
+
+    fun subscribeText(topic: String): String =
+        "[단단] ${Friend.myName()}의 요청이 오면 알림을 받으려면:\n" +
+            "1) 무료 앱 'ntfy'를 설치해 주세요 (플레이스토어/앱스토어에서 검색)\n" +
+            "2) 앱에서 '+' 를 눌러 주제 이름에 아래를 그대로 입력하고 구독해 주세요\n$topic\n" +
+            "(앱 없이 브라우저로 보려면 https://ntfy.sh/$topic )"
+
+    /**
+     * 설정된 모든 방법으로 보내고, 결과 줄을 메인 스레드에서 onStatus로 알려 준다.
+     * 문자는 두 통(설명 + 링크)으로 나가고, 푸시는 눌러서 바로 승인 페이지가 열린다.
+     */
+    fun dispatch(ctx: Context, headline: String, detail: String, link: String, onStatus: (String) -> Unit) {
+        if (!any()) { onStatus(""); return }
+        val lines = ArrayList<String>()
+        val main = Handler(Looper.getMainLooper())
+        fun publish() {
+            val t = synchronized(lines) { lines.joinToString("\n") }
+            main.post { onStatus(t) }
+        }
+        if (smsOn()) {
+            val ok = sendSms(ctx, Store.str("friendPhone"), "[단단] $headline\n$detail\n(아래 링크에서 승인해 주세요)", link)
+            lines.add(if (ok) "문자 ✓ 보냈어요" else "문자 ✗ 못 보냈어요 (번호·문자 권한 확인)")
+        }
+        if (pushOn()) {
+            val idx = lines.size
+            val topic = Store.str("friendTopic")
+            lines.add("푸시 … 보내는 중")
+            publish()
+            Thread {
+                val ok = sendPush(topic, headline, detail, link)
+                synchronized(lines) { lines[idx] = if (ok) "푸시 ✓ 보냈어요" else "푸시 ✗ 못 보냈어요 (인터넷 확인)" }
+                publish()
+            }.start()
+        } else {
+            publish()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun sendSms(ctx: Context, number: String, text: String, link: String): Boolean = try {
+        if (ctx.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+            false
+        } else {
+            val sm = if (Build.VERSION.SDK_INT >= 31) ctx.getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+            val to = number.filter { it.isDigit() || it == '+' }
+            sm.sendMultipartTextMessage(to, null, sm.divideMessage(text), null, null)
+            sm.sendMultipartTextMessage(to, null, sm.divideMessage(link), null, null)
+            true
+        }
+    } catch (e: Exception) { false }
+
+    private fun post(body: JSONObject): Boolean = try {
+        val c = URL("https://ntfy.sh/").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 8000
+        c.readTimeout = 8000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+        val code = c.responseCode
+        c.disconnect()
+        code in 200..299
+    } catch (e: Exception) { false }
+
+    private fun sendPush(topic: String, headline: String, detail: String, link: String): Boolean {
+        val full = JSONObject()
+            .put("topic", topic)
+            .put("title", ("단단 · " + headline).take(120))
+            .put("message", ("$detail\n\n$link").take(3500))
+            .put("priority", 4)
+            .put("tags", JSONArray(listOf("lock")))
+            .put("click", link)
+            .put("actions", JSONArray().put(JSONObject().put("action", "view").put("label", "승인 페이지 열기").put("url", link)))
+        if (post(full)) return true
+        // 링크가 길어서 거절되면 본문에만 링크를 넣어 다시 보낸다
+        val plain = JSONObject()
+            .put("topic", topic)
+            .put("title", ("단단 · " + headline).take(120))
+            .put("message", ("$detail\n\n$link").take(3500))
+            .put("priority", 4)
+        return post(plain)
+    }
+}
+
+/** 친구 알림 방법 설정: 문자 자동 전송, 푸시(ntfy). */
+@Composable
+fun NotifyDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    var phone by remember { mutableStateOf(Store.str("friendPhone")) }
+    var sms by remember { mutableStateOf(Store.bool("notifySms")) }
+    var push by remember { mutableStateOf(Store.bool("notifyPush")) }
+    var topic by remember { mutableStateOf(Store.str("friendTopic")) }
+    var status by remember { mutableStateOf("") }
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (!ok) {
+            sms = false
+            toast(ctx, "문자 권한이 필요해요. 단단 앱 정보에서 ⋮ → '제한된 설정 허용'을 누른 뒤 다시 켜 보세요")
+        }
+    }
+    fun save() {
+        Store.put("friendPhone", phone.filter { it.isDigit() || it == '+' })
+        Store.put("notifySms", sms)
+        Store.put("notifyPush", push)
+        Store.put("friendTopic", topic.trim())
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("친구 알림 방법") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "요청을 만들면 켜 둔 방법으로 친구에게 자동으로 가요. 둘 다 켜도 돼요.",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("문자 자동 전송", fontWeight = FontWeight.Bold)
+                        Text(
+                            "친구는 설치할 게 없어요. 링크가 길어서 문자가 여러 통 갈 수 있고 요금이 나올 수 있어요.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = sms, onCheckedChange = { want ->
+                        sms = want
+                        if (want && ctx.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+                            perm.launch(Manifest.permission.SEND_SMS)
+                        }
+                    })
+                }
+                OutlinedTextField(
+                    phone, { phone = it }, label = { Text("친구 전화번호") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("푸시 알림 (ntfy)", fontWeight = FontWeight.Bold)
+                        Text(
+                            "친구가 무료 앱 ntfy를 깔고 아래 주제를 한 번 구독해야 해요. 내용은 ntfy 서버를 거쳐요.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = push, onCheckedChange = { want ->
+                        push = want
+                        if (want && topic.isBlank()) topic = Notify.newTopic()
+                    })
+                }
+                OutlinedTextField(
+                    topic, { topic = it }, label = { Text("주제 이름 (비밀번호처럼 다루세요)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { topic = Notify.newTopic() }) { Text("새 주제") }
+                    OutlinedButton(onClick = {
+                        if (topic.isBlank()) topic = Notify.newTopic()
+                        save()
+                        shareText(ctx, Notify.subscribeText(topic))
+                    }) { Text("구독 방법 보내기") }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = {
+                    save()
+                    status = "보내는 중…"
+                    Notify.dispatch(ctx, "테스트", "이 알림이 보이면 연결이 잘 된 거예요.", Friend.base()) {
+                        status = it.ifBlank { "켜진 알림 방법이 없어요" }
+                    }
+                }) { Text("저장하고 테스트 보내기") }
+                if (status.isNotBlank()) Text(status, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+            }
+        },
+        confirmButton = { Button(onClick = { save(); onDismiss() }) { Text("저장") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )
 }

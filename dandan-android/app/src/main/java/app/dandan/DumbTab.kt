@@ -336,6 +336,7 @@ private fun DumbPolicyDialog(onDismiss: () -> Unit) {
     var made by remember { mutableStateOf(false) }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
+    var sent by remember { mutableStateOf("") }
     val msg = if (!made) "" else
         "[단단] ${Friend.myName()}의 요청\n바보폰 자유 시간을 정해 주세요.\n사유: ${reason.trim()}\n\n" +
             "링크를 열어 시간대를 정하고 승인해 주세요 ↓\n${Friend.policyLink(reason)}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
@@ -351,13 +352,24 @@ private fun DumbPolicyDialog(onDismiss: () -> Unit) {
                     placeholder = { Text("왜 자유 시간이 필요한가요?") }
                 )
                 if (!made) {
-                    Button(enabled = reason.trim().isNotEmpty(), onClick = { made = true }) { Text("링크 만들기") }
+                    Button(enabled = reason.trim().isNotEmpty(), onClick = {
+                        made = true
+                        Notify.dispatch(
+                            ctx, Friend.myName() + "이(가) 바보폰 자유 시간을 요청했어요", "사유: " + reason.trim(),
+                            Friend.policyLink(reason)
+                        ) { sent = it }
+                    }) { Text("링크 만들기") }
                 } else {
                     Spacer(Modifier.height(10.dp))
-                    Text("2. 링크를 친구에게 보내세요. 친구가 시간대와 유효기간을 정해 승인해요.", fontSize = 13.sp)
+                    Text("2. 친구에게 요청이 가야 해요. 친구가 시간대와 유효기간을 정해 승인해요.", fontSize = 13.sp)
+                    if (sent.isNotBlank()) Text(sent, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+                    else if (!Notify.any()) Text("자동 알림이 꺼져 있어요. 아래 버튼으로 직접 보내세요.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
-                        OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
+                        OutlinedButton(onClick = { kakaoText(ctx, msg) }) { Text("카카오톡") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("다른 앱으로") }
                     }
                     TextButton(onClick = { made = false; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
                     Spacer(Modifier.height(6.dp))

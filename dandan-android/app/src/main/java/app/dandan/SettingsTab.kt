@@ -86,6 +86,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     var deco by remember { mutableStateOf(false) }
     var faq by remember { mutableStateOf(false) }
     var friendSetup by remember { mutableStateOf(false) }
+    var notifyDlg by remember { mutableStateOf(false) }
     var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -170,6 +171,12 @@ fun SettingsTab(goPerm: () -> Unit) {
             onClick = { friendSetup = true }
         ) { Text("›", fontSize = 20.sp) }
         if (Friend.registered()) {
+            Row2(
+                "알림 방법",
+                if (Notify.any()) listOfNotNull(if (Notify.smsOn()) "문자" else null, if (Notify.pushOn()) "푸시" else null).joinToString(" · ") + " 켜짐 — 요청하면 친구에게 자동으로 가요"
+                else "꺼짐 — 요청을 친구에게 직접 보내야 해요",
+                onClick = { notifyDlg = true }
+            ) { Text("›", fontSize = 20.sp) }
             Text(
                 "아래 옵션을 켜면 그 상황에서 내가 아니라 친구가 풀지 말지 결정해요. 옵션을 끄거나 친구를 끊을 때도 친구 승인이 필요해요.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary,
@@ -203,6 +210,7 @@ fun SettingsTab(goPerm: () -> Unit) {
         )
     }
     if (deco) DecoDialog { deco = false }
+    if (notifyDlg) NotifyDialog { notifyDlg = false }
     if (friendSetup) {
         if (Friend.registered()) {
             AlertDialog(
