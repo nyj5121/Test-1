@@ -79,9 +79,11 @@ object Friend {
     }
 
     /** 친구가 자유 시간을 정하는 페이지로 가는 링크. 지금 정책을 함께 실어 보낸다. */
-    fun policyLink(): String {
-        val q = listOf("q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString())
-            .joinToString("|")
+    fun policyLink(reason: String = ""): String {
+        val q = listOf(
+            "q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString(),
+            cleanReason(reason)
+        ).joinToString("|")
         return base() + "#q=" + enc(q.toByteArray(Charsets.UTF_8))
     }
 
@@ -122,38 +124,47 @@ object Friend {
 
     private fun clean(s: String) = s.replace("|", " ").replace("\n", " ").trim().take(40)
 
-    /** 같은 요청이 아직 유효하면 그대로 쓰고(친구가 이미 받은 링크가 무효가 되지 않게), 아니면 새로 만든다. */
-    fun pendingOrNew(kind: String, label: String, param: String): String {
-        val now = System.currentTimeMillis() / 1000
+    private fun cleanReason(s: String) = s.replace("|", " ").replace("\n", " ").trim().take(120)
+
+    /** 같은 요청이 아직 유효하면 그대로 돌려준다(친구가 이미 받은 링크가 무효가 되지 않게). 없으면 null. */
+    fun existing(kind: String, label: String, param: String): String? {
         val cur = Store.str("friendPending")
-        if (cur.isNotBlank()) {
-            val p = cur.split("|")
-            if (p.size >= 7 && p[1] == kind && p[2] == clean(label) && p[3] == param &&
-                (p[5].toLongOrNull() ?: 0L) > now + 60
-            ) return cur
-        }
+        if (cur.isBlank()) return null
+        val p = cur.split("|")
+        val now = System.currentTimeMillis() / 1000
+        return if (p.size >= 8 && p[1] == kind && p[2] == clean(label) && p[3] == param &&
+            (p[5].toLongOrNull() ?: 0L) > now + 60
+        ) cur else null
+    }
+
+    /** 새 요청을 만든다. 사유도 서명 대상에 들어가서 친구가 본 사유를 나중에 바꿀 수 없다. */
+    fun newRequest(kind: String, label: String, param: String, reason: String): String {
+        val now = System.currentTimeMillis() / 1000
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val req = listOf(
-            "d1", kind, clean(label), param, enc(nonce), (now + 30 * 60).toString(), clean(myName())
+            "d1", kind, clean(label), param, enc(nonce), (now + 30 * 60).toString(),
+            clean(myName()), cleanReason(reason)
         ).joinToString("|")
         Store.put("friendPending", req)
         return req
     }
 
+    fun reasonOf(req: String): String = req.split("|").getOrNull(7) ?: ""
+
     fun summary(req: String): String {
         val p = req.split("|")
         if (p.size < 7) return "요청"
-        val label = p[2]
-        val param = p[3]
-        return when (p[1]) {
-            "promise_extra" -> "\"$label\" ${param}분 더 쓰기"
-            "app_unlock" -> "\"$label\" 앱 잠금을 ${param}분 동안 풀기"
-            "phone_unlock" -> "폰 잠금 중간 해제"
-            "sched_edit" -> "잠금 예약($label) 고치기·지우기"
-            "relax" -> "잠금 강도 설정 끄기"
-            "dumb_free" -> "바보폰에서 ${param}분 벗어나기"
-            else -> label
-        }
+        return summaryOf(p[1], p[2], p[3])
+    }
+
+    fun summaryOf(kind: String, label: String, param: String): String = when (kind) {
+        "promise_extra" -> "\"$label\" ${param}분 더 쓰기"
+        "app_unlock" -> "\"$label\" 앱 잠금을 ${param}분 동안 풀기"
+        "phone_unlock" -> "폰 잠금 중간 해제"
+        "sched_edit" -> "잠금 예약($label) 고치기·지우기"
+        "relax" -> "잠금 강도 설정 끄기"
+        "dumb_free" -> "바보폰에서 ${param}분 벗어나기"
+        else -> label
     }
 
     fun link(req: String): String = base() + "#r=" + enc(req.toByteArray(Charsets.UTF_8))
@@ -161,8 +172,8 @@ object Friend {
     fun inviteLink(): String = base() + "#hello=1&from=" + URLEncoder.encode(myName(), "UTF-8")
 
     fun requestMessage(req: String): String =
-        "[단단] ${myName()}의 요청\n${summary(req)}\n\n승인하려면 링크를 열어 주세요 ↓\n${link(req)}\n\n" +
-            "(승인하면 나오는 코드를 나한테 보내 줘)"
+        "[단단] ${myName()}의 요청\n${summary(req)}\n사유: ${reasonOf(req).ifBlank { "(없음)" }}\n\n" +
+            "승인하려면 링크를 열어 주세요 ↓\n${link(req)}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
 
     fun register(name: String, pkCode: String): Boolean = try {
         val bytes = dec(pkCode)
@@ -276,7 +287,11 @@ fun MinutesDialog(
     )
 }
 
-/** 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창. allowShare=false면 링크 복사만 보여 준다(폰 잠금 중). */
+/**
+ * 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창.
+ * 먼저 사유를 적어야 요청 링크가 만들어진다. 사유는 서명 대상에 들어가서 친구에게 그대로 보인다.
+ * allowShare=false면 링크 복사만 보여 준다(폰 잠금 중).
+ */
 @Composable
 fun FriendRequestDialog(
     kind: String,
@@ -287,51 +302,71 @@ fun FriendRequestDialog(
     onApproved: () -> Unit
 ) {
     val ctx = LocalContext.current
-    val req = remember { Friend.pendingOrNew(kind, label, param) }
+    val existing = remember { Friend.existing(kind, label, param) }
+    var req by remember { mutableStateOf(existing) }
+    var reason by remember { mutableStateOf(existing?.let { Friend.reasonOf(it) } ?: "") }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
-    val msg = remember(req) { Friend.requestMessage(req) }
+    val r = req
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${Friend.name()}에게 요청") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(Friend.summary(req), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(Friend.summaryOf(kind, label, param), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.height(10.dp))
-                Text("1. 요청 링크를 친구에게 보내세요.", fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
-                    if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
-                }
-                if (!allowShare) {
+                Text("1. 사유를 적어 주세요. 친구에게 그대로 보여요.", fontSize = 13.sp)
+                OutlinedTextField(
+                    value = reason, onValueChange = { reason = it.take(120) },
+                    enabled = r == null, modifier = Modifier.fillMaxWidth(), maxLines = 3,
+                    placeholder = { Text("왜 필요한가요?") }
+                )
+                if (r == null) {
+                    Button(
+                        enabled = reason.trim().isNotEmpty(),
+                        onClick = { req = Friend.newRequest(kind, label, param, reason) }
+                    ) { Text("요청 만들기") }
+                } else {
+                    val msg = Friend.requestMessage(r)
+                    Spacer(Modifier.height(10.dp))
+                    Text("2. 요청 링크를 친구에게 보내세요.", fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
+                        if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
+                    }
+                    if (!allowShare) {
+                        Text(
+                            "잠금 중에는 허용 앱(예: 카카오톡)에서 붙여넣어 보내세요.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(onClick = { req = null; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
+                    Spacer(Modifier.height(6.dp))
+                    Text("3. 친구가 승인하고 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = code, onValueChange = { code = it; err = "" },
+                        modifier = Modifier.fillMaxWidth(), maxLines = 4
+                    )
+                    TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                     Text(
-                        "잠금 중에는 허용 앱(예: 카카오톡)에서 붙여넣어 보내세요.",
+                        "30분 안에 승인받아야 해요.",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Spacer(Modifier.height(12.dp))
-                Text("2. 친구가 승인하고 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
-                OutlinedTextField(
-                    value = code, onValueChange = { code = it; err = "" },
-                    modifier = Modifier.fillMaxWidth(), maxLines = 4
-                )
-                TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
-                if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
-                Text(
-                    "30분 안에 승인받아야 해요.",
-                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         },
         confirmButton = {
-            Button(
-                enabled = code.isNotBlank(),
-                onClick = {
-                    if (Friend.verify(code)) { onDismiss(); onApproved() }
-                    else err = "코드가 맞지 않거나 만료됐어요."
-                }
-            ) { Text("확인") }
+            if (r != null) {
+                Button(
+                    enabled = code.isNotBlank(),
+                    onClick = {
+                        if (Friend.verify(code)) { onDismiss(); onApproved() }
+                        else err = "코드가 맞지 않거나 만료됐어요."
+                    }
+                ) { Text("확인") }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )

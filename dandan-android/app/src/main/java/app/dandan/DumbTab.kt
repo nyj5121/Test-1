@@ -328,43 +328,59 @@ fun FreeAskFlow(onDismiss: () -> Unit) {
     }
 }
 
-/** 친구가 정한 자유 시간 정책 코드를 붙여넣는 창. */
+/** 자유 시간 요청·변경: 사유를 적어 링크를 만들고, 친구가 정한 정책 코드를 붙여넣는 창. */
 @Composable
 private fun DumbPolicyDialog(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
+    var reason by remember { mutableStateOf("") }
+    var made by remember { mutableStateOf(false) }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
-    val msg = remember {
-        "[단단] ${Friend.myName()}의 요청\n바보폰 자유 시간을 정해 주세요.\n\n링크를 열어 시간대를 정하고 승인해 주세요 ↓\n${Friend.policyLink()}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
-    }
+    val msg = if (!made) "" else
+        "[단단] ${Friend.myName()}의 요청\n바보폰 자유 시간을 정해 주세요.\n사유: ${reason.trim()}\n\n" +
+            "링크를 열어 시간대를 정하고 승인해 주세요 ↓\n${Friend.policyLink(reason)}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${Friend.name()}에게 자유 시간 요청") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("1. 링크를 친구에게 보내세요. 친구가 시간대와 유효기간을 정해 승인해요.", fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
-                    OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
-                }
-                Spacer(Modifier.height(12.dp))
-                Text("2. 친구가 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
+                Text("1. 사유를 적어 주세요. 친구에게 그대로 보여요.", fontSize = 13.sp)
                 OutlinedTextField(
-                    value = code, onValueChange = { code = it; err = "" },
-                    modifier = Modifier.fillMaxWidth(), maxLines = 5
+                    value = reason, onValueChange = { reason = it.take(120) },
+                    enabled = !made, modifier = Modifier.fillMaxWidth(), maxLines = 3,
+                    placeholder = { Text("왜 자유 시간이 필요한가요?") }
                 )
-                TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
-                if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                if (!made) {
+                    Button(enabled = reason.trim().isNotEmpty(), onClick = { made = true }) { Text("링크 만들기") }
+                } else {
+                    Spacer(Modifier.height(10.dp))
+                    Text("2. 링크를 친구에게 보내세요. 친구가 시간대와 유효기간을 정해 승인해요.", fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { copyText(ctx, msg); toast(ctx, "복사했어요") }) { Text("링크 복사") }
+                        OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("공유하기") }
+                    }
+                    TextButton(onClick = { made = false; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
+                    Spacer(Modifier.height(6.dp))
+                    Text("3. 친구가 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
+                    OutlinedTextField(
+                        value = code, onValueChange = { code = it; err = "" },
+                        modifier = Modifier.fillMaxWidth(), maxLines = 5
+                    )
+                    TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
             }
         },
         confirmButton = {
-            Button(
-                enabled = code.isNotBlank(),
-                onClick = {
-                    val e = Friend.applyPolicy(code)
-                    if (e == null) { toast(ctx, "자유 시간을 적용했어요"); onDismiss() } else err = e
-                }
-            ) { Text("적용") }
+            if (made) {
+                Button(
+                    enabled = code.isNotBlank(),
+                    onClick = {
+                        val e = Friend.applyPolicy(code)
+                        if (e == null) { toast(ctx, "자유 시간을 적용했어요"); onDismiss() } else err = e
+                    }
+                ) { Text("적용") }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )
