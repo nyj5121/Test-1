@@ -437,6 +437,7 @@ object Friend {
         val got = Store.str("friendAppr").split(",").filter { it.isNotBlank() }.toMutableList()
         if (who.pk !in got) { got.add(who.pk); Store.put("friendAppr", got.joinToString(",")) }
         if (have() < need(pending)) return false
+        Store.put("friendLastOk", pending)   // 취소와 구분하려고 승인된 요청을 기억한다
         Store.put("friendPending", "")
         Store.put("friendEffect", "")
         Store.put("friendAppr", "")
@@ -540,8 +541,9 @@ fun FriendRequestDialog(
         while (true) {
             val cur = Store.str("friendPending")
             if (cur.isBlank()) {
-                // 백그라운드에서 이미 승인돼 적용됐다
-                onApproved(); onDismiss(); return@LaunchedEffect
+                // 백그라운드에서 이미 승인돼 적용됐거나, 다른 곳에서 취소됐다
+                if (Store.str("friendLastOk") == r) onApproved()
+                onDismiss(); return@LaunchedEffect
             }
             if (cur != r) { onDismiss(); return@LaunchedEffect }
             if (System.currentTimeMillis() / 1000 > exp) {

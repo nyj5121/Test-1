@@ -583,6 +583,10 @@ fun FriendTab() {
         }
 
         Spacer(Modifier.height(20.dp))
+        Text("보낸 요청", fontWeight = FontWeight.Bold, fontSize = 17.sp)
+        SentRequests()
+
+        Spacer(Modifier.height(20.dp))
         Text("내 친구 ${Friend.count()}/${Friend.MAX_FRIENDS}", fontWeight = FontWeight.Bold, fontSize = 17.sp)
         if (!Friend.registered()) Text("아직 친구가 없어요.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Friend.list().forEach { f ->
@@ -631,4 +635,83 @@ fun FriendTab() {
     if (web) FriendSetupDialog { web = false }
     if (notifyDlg) NotifyDialog { notifyDlg = false }
     gate.Dialog()
+}
+
+/**
+ * 내가 보낸, 아직 처리 안 된 요청. 요청 창을 닫았어도 여기서 보고 취소할 수 있다.
+ * 친구 탭, 바보폰 홈, 잠금 화면에서 같이 쓴다. dark=true면 검은 배경용 색.
+ */
+@Composable
+fun SentRequests(dark: Boolean = false) {
+    Store.rev.intValue
+    val now = System.currentTimeMillis() / 1000
+    val req = Store.str("friendPending")
+    val reqExp = req.split("|").getOrNull(5)?.toLongOrNull() ?: 0L
+    val reqOn = req.isNotBlank() && reqExp > now
+    val polOn = Store.str("policyTopic").isNotBlank() && Store.long("policyExp") > now
+    val fg = if (dark) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurface
+    val sub = if (dark) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurfaceVariant
+    val bg = if (dark) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant
+    var ask by remember { mutableStateOf("") }
+
+    if (!reqOn && !polOn) {
+        Text("보낸 요청이 없어요", color = sub, fontSize = 13.sp, modifier = Modifier.padding(vertical = 6.dp))
+    }
+    if (reqOn) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).background(bg).padding(12.dp)) {
+            Text(Friend.summary(req), color = fg, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("사유: " + Friend.reasonOf(req).ifBlank { "(없음)" }, color = sub, fontSize = 13.sp)
+            val need = Friend.need(req)
+            Text(
+                (if (need > 1) "동의 ${Friend.have()}/${need}명 · " else "승인 기다리는 중 · ") +
+                    "${Fmt.span((reqExp - now) * 1000)} 남음",
+                color = sub, fontSize = 12.sp
+            )
+            OutlinedButton(onClick = { ask = "req" }) { Text("요청 취소") }
+        }
+    }
+    if (polOn) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).background(bg).padding(12.dp)) {
+            Text("바보폰 자유 시간 정해 달라는 요청", color = fg, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("사유: " + Store.str("policyReason").ifBlank { "(없음)" }, color = sub, fontSize = 13.sp)
+            OutlinedButton(onClick = { ask = "pol" }) { Text("요청 취소") }
+        }
+    }
+    if (ask.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { ask = "" },
+            title = { Text("요청을 취소할까요?") },
+            text = { Text("친구들이 받은 링크와 앱 요청이 모두 '처리됨'으로 닫혀요. 이미 온 승인은 버려져요.") },
+            confirmButton = {
+                Button(onClick = {
+                    if (ask == "req") Friend.cancel()
+                    else {
+                        Relay.postAsync(Store.str("policyTopic"), "DONE")
+                        Store.put("policyTopic", "")
+                    }
+                    ask = ""
+                }) { Text("취소하기") }
+            },
+            dismissButton = { TextButton(onClick = { ask = "" }) { Text("그대로 두기") } }
+        )
+    }
+}
+
+/** 바보폰 홈·잠금 화면에서 보낸 요청을 여는 창 */
+@Composable
+fun SentDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("보낸 요청") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { SentRequests() } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
+    )
+}
+
+/** 처리 안 된 보낸 요청이 있는가 (바보폰 홈·잠금 화면에서 링크를 보일지 정할 때) */
+fun hasSentRequest(): Boolean {
+    val now = System.currentTimeMillis() / 1000
+    val req = Store.str("friendPending")
+    val reqOn = req.isNotBlank() && (req.split("|").getOrNull(5)?.toLongOrNull() ?: 0L) > now
+    return reqOn || (Store.str("policyTopic").isNotBlank() && Store.long("policyExp") > now)
 }
