@@ -23,6 +23,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
@@ -202,20 +205,31 @@ private fun QuickApps(ctx: Context) {
         Apps.dialerPkg(ctx)?.let { l.add(it) }
         Apps.smsPkg(ctx)?.let { if (it !in l) l.add(it) }
         Store.allowed.forEach { if (it !in l) l.add(it) }
-        l.take(5)
+        l.toList()
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-        pkgs.forEach { p ->
-            Column(
-                Modifier.clickable { Apps.open(ctx, p) },
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                AppIcon(p, 52.dp)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    Apps.label(ctx, p).take(6), color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 11.sp, textAlign = TextAlign.Center
-                )
+    Column(
+        Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        pkgs.chunked(4).forEach { rowPkgs ->
+            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+                rowPkgs.forEach { p ->
+                    Column(
+                        Modifier.clickable {
+                            GuardService.graceUntil = SystemClock.elapsedRealtime() + 2500L
+                            Apps.open(ctx, p)
+                        },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        AppIcon(p, 52.dp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            Apps.label(ctx, p).take(6), color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp, textAlign = TextAlign.Center
+                        )
+                    }
+                }
             }
         }
     }

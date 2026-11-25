@@ -4,6 +4,10 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
@@ -24,8 +28,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 
 private const val IG = "com.instagram.android"
-private val TAB_IDS = listOf("feed_tab", "search_tab", "clips_tab", "profile_tab", "creation_tab")
-private val TAB_DESCS = setOf("홈", "검색 및 탐색", "릴스", "프로필", "Home", "Search and Explore", "Reels", "Profile")
+private val TAB_IDS = listOf("feed_tab", "search_tab", "clips_tab", "profile_tab", "direct_tab", "creation_tab")
+private val TAB_DESCS = setOf("홈", "검색 및 탐색", "릴스", "프로필", "메시지", "Home", "Search and Explore", "Reels", "Profile", "Messages")
 
 /**
  * 잠금의 중심. 접근성 서비스로 지금 앞에 있는 앱을 감지해서
@@ -38,6 +42,10 @@ class GuardService : AccessibilityService() {
     companion object {
         @Volatile
         var instance: GuardService? = null
+
+        /** 잠금 화면에서 허용 앱을 연 직후 몇 초 동안은 런처 같은 전환 화면을 봐준다. */
+        @Volatile
+        var graceUntil = 0L
 
         fun enabled(ctx: Context): Boolean {
             val v = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
@@ -97,6 +105,7 @@ class GuardService : AccessibilityService() {
         } catch (e: Exception) { emptySet() }
         dialerPkg = Apps.dialerPkg(this)
         smsPkg = Apps.smsPkg(this)
+        helperCache.clear()
     }
 
     // ---------- 1초마다 ----------
@@ -136,9 +145,17 @@ class GuardService : AccessibilityService() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         if (!pm.isInteractive) return
 
+        // 마지막으로 본 창이 아니라 "지금 실제로 앞에 있는 창"을 기준으로 한다.
+        // (잠깐 떴다 사라진 창 때문에 허용 앱 위에 잠금 화면이 덮이지 않게)
+        val act = activePkg()
+        val actOk = act != null && act !in imePkgs && act != "com.android.systemui" && act != "android"
+        if (actOk) fgPkg = act
         val fg = fgPkg ?: return
         if (phone != null) {
-            if (fg != packageName && !allowedDuring(fg)) goLock()
+            if (actOk && fg != packageName && !allowedDuring(fg) && !inGrace()) {
+                logBlock("tick", fg, "")
+                goLock()
+            }
         } else {
             if (Dumb.active(this) && fg != packageName && !dumbAllowed(fg)) { openDumb(); return }
             tickPromise(fg)
@@ -204,7 +221,7 @@ class GuardService : AccessibilityService() {
         if (pkg != IG) hideIg()
 
         if (phone != null) {
-            if (!allowedDuring(pkg)) goLock()
+            if (!allowedDuring(pkg)) violation(pkg, cls)
             return
         }
 
@@ -221,7 +238,66 @@ class GuardService : AccessibilityService() {
         if (pkg == dialerPkg || pkg == smsPkg) return true
         if (pkg.contains("incallui") || pkg.contains("telecom") || pkg.contains("emergency")) return true
         if (pkg == "com.android.phone") return true
+        if (helperOk(pkg)) return true
         return false
+    }
+
+    private val helperCache = HashMap<String, Boolean>()
+
+    /**
+     * 런처 아이콘이 없는 시스템 앱(권한 확인 창, 파일·사진 선택기 등)은 허용 앱이 띄울 수 있어서 허용한다.
+     * 홈 화면, 설정, 앱 설치 화면은 어떤 경우에도 허용하지 않는다.
+     */
+    private fun helperOk(pkg: String): Boolean {
+        if (pkg in homePkgs || pkg in Dumb.ALWAYS_BLOCKED) return false
+        if (pkg.contains("settings", true) || pkg.contains("installer", true)) return false
+        helperCache[pkg]?.let { return it }
+        val ok = try {
+            val ai = packageManager.getApplicationInfo(pkg, 0)
+            val system = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 || (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            system && packageManager.getLaunchIntentForPackage(pkg) == null
+        } catch (e: Exception) { false }
+        helperCache[pkg] = ok
+        return ok
+    }
+
+    private fun activePkg(): String? = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+
+    private fun inGrace(): Boolean = SystemClock.elapsedRealtime() < graceUntil
+
+    private var violationSeq = 0
+
+    private fun isHighRisk(pkg: String): Boolean =
+        pkg in homePkgs || pkg in Dumb.ALWAYS_BLOCKED || pkg.contains("settings", true) || pkg.contains("installer", true)
+
+    /** 허용되지 않은 창이 떴을 때. 위험한 곳은 바로, 나머지는 0.35초 뒤에도 앞에 있을 때만 막는다. */
+    private fun violation(pkg: String, cls: String) {
+        if (inGrace() && pkg in homePkgs) { logBlock("grace", pkg, cls); return }
+        if (isHighRisk(pkg)) { logBlock("block", pkg, cls); goLock(); return }
+        val seq = ++violationSeq
+        handler.postDelayed({
+            if (seq != violationSeq) return@postDelayed
+            if (Engine.phone(this) == null) return@postDelayed
+            val act = activePkg()
+            if (act != null && allowedDuring(act)) {
+                logBlock("skip", "$pkg (앞=$act)", cls)
+                return@postDelayed
+            }
+            logBlock("block", pkg, cls)
+            goLock()
+        }, 350)
+    }
+
+    private val lockLog = ArrayList<String>()
+
+    /** 잠금 중 막거나 봐준 기록. 설정 → 잠금 차단 기록에서 볼 수 있다(원인 찾기용). */
+    private fun logBlock(action: String, pkg: String, cls: String) {
+        val t = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        synchronized(lockLog) {
+            lockLog.add("$t $action $pkg ${cls.substringAfterLast('.')}".trim())
+            while (lockLog.size > 40) lockLog.removeAt(0)
+            Store.put("lockLog", lockLog.joinToString("\n"))
+        }
     }
 
     private fun dismissShade() {
@@ -338,10 +414,13 @@ class GuardService : AccessibilityService() {
     }
 
     // ---------- 인스타그램: 스토리·DM만 ----------
-    private var igView: FrameLayout? = null
-    private var igText: TextView? = null
-    private var igBtn: Button? = null
-    private var igTopApplied = -1
+    /** 화면 위에 씌울 가림막 한 칸. btn: 0 없음, 1 "홈으로", 2 "뒤로". */
+    private class Region(val key: String, val rect: Rect, val text: String, val alpha: Int, val btn: Int)
+
+    private val igViews = HashMap<String, FrameLayout>()
+    private val igTexts = HashMap<String, TextView>()
+    private val igBtns = HashMap<String, Button>()
+    private val igRects = HashMap<String, Rect>()
     private var lastIgScan = 0L
     private var lastDiagWrite = 0L
     private val igDumps = LinkedHashMap<String, String>()
@@ -351,22 +430,45 @@ class GuardService : AccessibilityService() {
         return if (id > 0) resources.getDimensionPixelSize(id) else 90
     }
 
-    /** 인스타 화면을 훑어서 하단 탭 바가 보이면(=피드/릴스/탐색/프로필) 가림막을 씌운다. 못 알아보면 아무것도 안 한다. */
+    /** 내비게이션 바까지 포함한 실제 화면 크기. */
+    @Suppress("DEPRECATION")
+    private fun screenSize(): Pair<Int, Int> {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = wm.maximumWindowMetrics.bounds
+            return Pair(b.width(), b.height())
+        }
+        val m = android.util.DisplayMetrics()
+        wm.defaultDisplay.getRealMetrics(m)
+        return Pair(m.widthPixels, m.heightPixels)
+    }
+
+    /**
+     * 인스타 화면을 훑어서 하단 탭 바가 보이면 탭 상태에 맞게 가림막을 정한다.
+     *  - 릴스·탐색·프로필 탭 버튼 위에는 작은 막을 씌워 누르지 못하게 한다. (홈·메시지 탭은 그대로)
+     *  - 홈 탭: 스토리 줄 아래 피드를 가린다.
+     *  - 메시지 탭(DM 목록): 아무것도 가리지 않는다.
+     *  - 릴스·탐색·프로필 화면: 내용을 가리고 "홈으로" 버튼을 보여 준다.
+     *  - 탭 바가 없는 화면은 DM 대화·스토리라서 두고, 릴스 재생 화면(DM으로 받은 릴스 등)만 막는다.
+     * 못 알아보면 아무것도 하지 않는다.
+     */
     private fun igScan() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastIgScan < 400) return
         lastIgScan = now
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != IG) return
-        val sh = resources.displayMetrics.heightPixels
-        val sw = resources.displayMetrics.widthPixels
+        val (sw, sh) = screenSize()
         val diag = Store.igDiag
 
         var tabsFound = 0
         var selectedTab: String? = null
         var trayBottom = -1
+        var tabBarTop = -1
         var hasDm = false
         var hasStory = false
+        var hasClipsViewer = false
+        val tabRects = HashMap<String, Rect>()
         val dump = StringBuilder()
         val r = Rect()
         val stack = ArrayList<AccessibilityNodeInfo>()
@@ -381,9 +483,14 @@ class GuardService : AccessibilityService() {
             val isTab = id in TAB_IDS || (id.isEmpty() && desc in TAB_DESCS && r.top > sh * 8 / 10)
             if (isTab) {
                 tabsFound++
-                if (node.isSelected) selectedTab = id.ifEmpty { desc }
+                val key = id.ifEmpty { desc }
+                tabRects[key] = Rect(r)
+                if (node.isSelected) selectedTab = key
             }
-            if (id.contains("tray", true) && r.top < sh * 4 / 10 && r.bottom > trayBottom) trayBottom = r.bottom
+            if (id == "tab_bar") tabBarTop = r.top
+            if (id == "clips_viewer_view_pager") hasClipsViewer = true
+            // 화면 밖에 미리 만들어 둔 홈 피드의 스토리 줄은 무시한다
+            if (id.contains("tray", true) && r.right > 0 && r.left < sw && r.top < sh * 4 / 10 && r.bottom > trayBottom) trayBottom = r.bottom
             if (id.contains("direct", true) || id.contains("inbox", true)) hasDm = true
             if (id.contains("reel_viewer", true) || id.contains("story", true)) hasStory = true
             if (diag && (id.isNotEmpty() || desc.isNotEmpty()) && dump.length < 6000) {
@@ -398,7 +505,7 @@ class GuardService : AccessibilityService() {
 
         val tabBar = tabsFound >= 3
         if (diag) {
-            val key = "tabs=$tabBar sel=${selectedTab ?: "?"} tray=${trayBottom > 0} dm=$hasDm story=$hasStory"
+            val key = "tabs=$tabBar sel=${selectedTab ?: "?"} tray=${trayBottom > 0} dm=$hasDm story=$hasStory clips=$hasClipsViewer"
             igDumps[key] = "screen=${sw}x$sh tabsFound=$tabsFound trayBottom=$trayBottom\n$dump"
             if (now - lastDiagWrite > 2000) {
                 lastDiagWrite = now
@@ -408,70 +515,108 @@ class GuardService : AccessibilityService() {
             }
         }
 
-        if (!Store.igMode || !tabBar) { hideIg(); return }
+        if (!Store.igMode) { hideIg(); return }
 
-        val homeSelected = selectedTab == null || selectedTab == "feed_tab" || selectedTab == "홈" || selectedTab == "Home"
-        if (homeSelected) {
-            val manual = if (Store.igTop > 0) sh * Store.igTop / 100 else 0
-            val top = when {
-                manual > 0 -> manual
-                trayBottom > 0 -> trayBottom
-                else -> sh * 28 / 100
-            }.coerceIn(sh / 10, sh * 6 / 10)
-            showIg(top, false)
-        } else {
-            showIg(statusBarH(), true)
+        val top0 = statusBarH()
+        val regions = ArrayList<Region>()
+        if (!tabBar) {
+            if (hasClipsViewer) regions.add(Region("reel", Rect(0, top0, sw, sh), "릴스는 볼 수 없어요.", 0xF5, 2))
+            applyRegions(regions)
+            return
         }
+
+        val dmTabs = setOf("direct_tab", "메시지", "Messages")
+        val homeTabs = setOf("feed_tab", "홈", "Home")
+        val blockedTabs = setOf("clips_tab", "search_tab", "profile_tab", "릴스", "검색 및 탐색", "프로필", "Reels", "Search and Explore", "Profile")
+        val bottom = if (tabBarTop > 0) tabBarTop else tabRects.values.minOf { it.top }
+
+        for ((k, rc) in tabRects) {
+            if (k in blockedTabs) regions.add(Region("tab_$k", Rect(rc), "🔒", 0xE6, 0))
+        }
+        val sel = selectedTab
+        when {
+            sel == null || sel in dmTabs -> { }   // 메시지 탭이거나 못 알아봄: 내용은 그대로 둔다
+            sel in blockedTabs ->
+                regions.add(Region("content", Rect(0, top0, sw, bottom), "이 화면은 쓸 수 없어요.\n아래에서 홈(스토리)이나 메시지 탭을 누르세요.", 0xF5, 1))
+            sel in homeTabs -> {
+                val manual = if (Store.igTop > 0) sh * Store.igTop / 100 else 0
+                val top = when {
+                    manual > 0 -> manual
+                    trayBottom > 0 -> trayBottom
+                    else -> top0 + (bottom - top0) * 28 / 100
+                }.coerceIn(top0, bottom - 100)
+                regions.add(Region("content", Rect(0, top, sw, bottom), "피드는 가려져 있어요.\n위에서 스토리를 보거나\n아래 메시지 탭으로 가세요.", 0xF2, 0))
+            }
+        }
+        applyRegions(regions)
     }
 
-    private fun showIg(top: Int, fullCover: Boolean) {
+    /** 원하는 가림막 목록에 맞춰 창을 만들고, 고치고, 없앤다. */
+    private fun applyRegions(list: List<Region>) {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val h = resources.displayMetrics.heightPixels - top
-        val d = resources.displayMetrics.density
-        val existing = igView
-        if (existing == null) {
-            val f = FrameLayout(this)
-            f.setBackgroundColor(0xF2101218.toInt())
-            f.setOnTouchListener { _, _ -> true }
-            val t = TextView(this)
-            t.setTextColor(0xFFECEEF3.toInt())
-            t.textSize = 16f
-            t.gravity = Gravity.CENTER
-            f.addView(t, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-            val b = Button(this)
-            b.text = "홈으로"
-            b.setOnClickListener { igGoHome() }
-            val blp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM)
-            blp.bottomMargin = (120 * d).toInt()
-            f.addView(b, blp)
-            val lp = WindowManager.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, h,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            )
-            lp.gravity = Gravity.TOP or Gravity.START
-            lp.y = top
-            try { wm.addView(f, lp) } catch (e: Exception) { return }
-            igView = f; igText = t; igBtn = b; igTopApplied = top
-        } else if (igTopApplied != top) {
-            val lp = existing.layoutParams as WindowManager.LayoutParams
-            lp.y = top
-            lp.height = h
-            try { wm.updateViewLayout(existing, lp) } catch (e: Exception) { }
-            igTopApplied = top
+        val keep = list.map { it.key }.toSet()
+        for (k in igViews.keys.toList()) {
+            if (k !in keep) {
+                try { wm.removeView(igViews[k]) } catch (e: Exception) { }
+                igViews.remove(k); igTexts.remove(k); igBtns.remove(k); igRects.remove(k)
+            }
         }
-        igText?.text = if (fullCover) "릴스·탐색·프로필은 쓸 수 없어요.\n스토리와 DM만 쓸 수 있어요."
-        else "피드는 가려져 있어요.\n위에서 스토리와 DM만 쓰세요."
-        igBtn?.visibility = if (fullCover) View.VISIBLE else View.GONE
+        val d = resources.displayMetrics.density
+        for (rg in list) {
+            val w = rg.rect.width()
+            val h = rg.rect.height()
+            if (w <= 0 || h <= 0) continue
+            val color = (rg.alpha shl 24) or 0x101218
+            val existing = igViews[rg.key]
+            if (existing == null) {
+                val f = FrameLayout(this)
+                f.setBackgroundColor(color)
+                f.setOnTouchListener { _, _ -> true }
+                val t = TextView(this)
+                t.setTextColor(0xFFECEEF3.toInt())
+                t.textSize = 16f
+                t.gravity = Gravity.CENTER
+                f.addView(t, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+                val b = Button(this)
+                b.setOnClickListener { if (b.tag == 2) performGlobalAction(GLOBAL_ACTION_BACK) else igGoHome() }
+                val blp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM)
+                blp.bottomMargin = (90 * d).toInt()
+                f.addView(b, blp)
+                val lp = WindowManager.LayoutParams(
+                    w, h,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT
+                )
+                lp.gravity = Gravity.TOP or Gravity.START
+                lp.x = rg.rect.left
+                lp.y = rg.rect.top
+                try { wm.addView(f, lp) } catch (e: Exception) { continue }
+                igViews[rg.key] = f; igTexts[rg.key] = t; igBtns[rg.key] = b; igRects[rg.key] = Rect(rg.rect)
+            } else if (igRects[rg.key] != rg.rect) {
+                val lp = existing.layoutParams as WindowManager.LayoutParams
+                lp.x = rg.rect.left
+                lp.y = rg.rect.top
+                lp.width = w
+                lp.height = h
+                try { wm.updateViewLayout(existing, lp) } catch (e: Exception) { }
+                igRects[rg.key] = Rect(rg.rect)
+            }
+            igViews[rg.key]?.setBackgroundColor(color)
+            igTexts[rg.key]?.text = rg.text
+            igBtns[rg.key]?.let {
+                it.tag = rg.btn
+                it.text = if (rg.btn == 2) "뒤로" else "홈으로"
+                it.visibility = if (rg.btn == 0) View.GONE else View.VISIBLE
+            }
+        }
     }
 
     private fun hideIg() {
-        val v = igView ?: return
-        try { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) } catch (e: Exception) { }
-        igView = null; igText = null; igBtn = null; igTopApplied = -1
+        if (igViews.isEmpty()) return
+        applyRegions(emptyList())
     }
 
     private fun igGoHome() {

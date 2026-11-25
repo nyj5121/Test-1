@@ -87,6 +87,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     var faq by remember { mutableStateOf(false) }
     var friendSetup by remember { mutableStateOf(false) }
     var notifyDlg by remember { mutableStateOf(false) }
+    var logDlg by remember { mutableStateOf(false) }
     var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -198,6 +199,7 @@ fun SettingsTab(goPerm: () -> Unit) {
 
         Section("기타")
         Row2("권한 설정", "접근성, 다른 앱 위에 표시, 기기 관리자 등", onClick = goPerm) { Text("›", fontSize = 20.sp) }
+        Row2("잠금 차단 기록", "허용 앱이 막힐 때 원인을 찾는 데 써요", onClick = { logDlg = true }) { Text("›", fontSize = 20.sp) }
         Row2("자주 묻는 질문", "잠금이 안 풀릴 때, 권한이 막힐 때", onClick = { faq = true }) { Text("›", fontSize = 20.sp) }
         Spacer(Modifier.height(40.dp))
     }
@@ -211,6 +213,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     }
     if (deco) DecoDialog { deco = false }
     if (notifyDlg) NotifyDialog { notifyDlg = false }
+    if (logDlg) LockLogDialog { logDlg = false }
     if (friendSetup) {
         if (Friend.registered()) {
             AlertDialog(
@@ -317,5 +320,32 @@ private fun DecoDialog(onClose: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("완료") } }
+    )
+}
+
+@Composable
+private fun LockLogDialog(onClose: () -> Unit) {
+    val ctx = LocalContext.current
+    Store.rev.intValue
+    val log = Store.str("lockLog")
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("잠금 차단 기록") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    if (log.isBlank()) "아직 기록이 없어요. 잠금 중에 앱이 막히면 여기에 남아요.\n\nblock=막음 · skip=앞에 허용 앱이 있어서 봐줌 · grace=앱을 여는 중이라 봐줌 · tick=1초 점검이 막음"
+                    else log,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { copyText(ctx, log); toast(ctx, "복사했어요") }) { Text("복사") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { Store.put("lockLog", "") }) { Text("지우기") }
+                TextButton(onClick = onClose) { Text("닫기") }
+            }
+        }
     )
 }
