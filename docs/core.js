@@ -44,7 +44,7 @@
   function parseReq(s) {
     var p = String(s).split('|');
     if (p.length < 7 || p[0] !== 'd1') return null;
-    return { kind: p[1], label: p[2], param: p[3], nonce: p[4], exp: parseInt(p[5], 10), from: p[6], reason: p[7] || '', need: Math.max(1, parseInt(p[8], 10) || 1) };
+    return { kind: p[1], label: p[2], param: p[3], nonce: p[4], exp: parseInt(p[5], 10), from: p[6], reason: p[7] || '', need: Math.max(1, parseInt(p[8], 10) || 1), fps: (p[9] || '').split('.').filter(Boolean) };
   }
 
   function describe(q) {
@@ -65,7 +65,7 @@
   function parseQ(s) {
     var p = String(s).split('|');
     if (p.length < 5 || p[0] !== 'q1') return null;
-    return { dev: p[1], from: p[2], wins: p[3], exp: parseInt(p[4], 10) || 0, reason: p[5] || '' };
+    return { dev: p[1], from: p[2], wins: p[3], exp: parseInt(p[4], 10) || 0, reason: p[5] || '', fps: (p[6] || '').split('.').filter(Boolean) };
   }
 
   /* 시간대 문자열 "HHMM-HHMM:요일마스크,..." (마스크: 월=1, 화=2, ... 일=64) */

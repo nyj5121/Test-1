@@ -106,7 +106,7 @@ object Friend {
     /** 친구가 자유 시간을 정하는 페이지로 가는 링크. 지금 정책을 함께 실어 보낸다. */
     fun policyQ(reason: String = ""): String = listOf(
         "q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString(),
-        cleanReason(reason)
+        cleanReason(reason), fingerprints()
     ).joinToString("|")
 
     fun policyLink(reason: String = "", topic: String = ""): String {
@@ -195,8 +195,18 @@ object Friend {
         }
     }
 
-    /** 서명이 등록된 친구 중 누구의 것인지 찾는다. 아무도 아니면 null. */
-    fun signer(message: String, sigB64: String): Pal? = list().firstOrNull { verifyRaw(it.pk, message, sigB64) }
+    /** 승인할 수 있는 친구. '앱 연결 친구만' 옵션이 켜져 있으면 웹 링크로 등록한 친구는 빠진다. */
+    fun approvers(): List<Pal> = if (Store.bool("appOnly")) list().filter { it.app } else list()
+
+    /** 열쇠의 짧은 지문. 요청에 실어 보내서, 친구 페이지가 '이 브라우저가 승인할 수 있는지' 미리 알려 준다. */
+    fun fingerprint(pk: String): String = try {
+        enc(java.security.MessageDigest.getInstance("SHA-256").digest(dec(pk))).take(10)
+    } catch (e: Exception) { "" }
+
+    fun fingerprints(): String = approvers().joinToString(".") { fingerprint(it.pk) }
+
+    /** 서명이 승인할 수 있는 친구 중 누구의 것인지 찾는다. 아무도 아니면 null. */
+    fun signer(message: String, sigB64: String): Pal? = approvers().firstOrNull { verifyRaw(it.pk, message, sigB64) }
     fun myName(): String = Store.str("myName", "나")
     fun scopeOn(s: String): Boolean = registered() && Store.bool("fs_$s")
 
@@ -239,7 +249,7 @@ object Friend {
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val req = listOf(
             "d1", kind, clean(label), param, enc(nonce), (now + REQUEST_TTL).toString(),
-            clean(myName()), cleanReason(reason), quorum().toString()
+            clean(myName()), cleanReason(reason), quorum().toString(), fingerprints()
         ).joinToString("|")
         // 이전 요청이 아직 열려 있었다면 그 링크는 더 못 쓰게 닫는다
         if (Store.str("friendPending").isNotBlank()) Relay.postAsync(Store.str("friendReply"), "DONE")
@@ -336,15 +346,15 @@ object Friend {
     }
 
     /** 승인에 필요한 서로 다른 친구 수. 설정값이지만 등록된 친구 수를 넘을 수는 없다. */
-    fun quorum(): Int = Store.int("quorum", 1).coerceIn(1, maxOf(1, count()))
+    fun quorum(): Int = Store.int("quorum", 1).coerceIn(1, maxOf(1, approvers().size))
 
     /** 이 요청에 필요한 동의 수. 요청에 서명돼 실린 값이라 나중에 바꿀 수 없다(친구 수가 줄었으면 그만큼만). */
     fun need(req: String): Int =
-        (req.split("|").getOrNull(8)?.toIntOrNull() ?: 1).coerceIn(1, maxOf(1, count()))
+        (req.split("|").getOrNull(8)?.toIntOrNull() ?: 1).coerceIn(1, maxOf(1, approvers().size))
 
     /** 지금 요청에 동의한(아직 등록된) 친구 수 */
     fun have(): Int {
-        val keys = list().map { it.pk }.toSet()
+        val keys = approvers().map { it.pk }.toSet()
         return Store.str("friendAppr").split(",").filter { it.isNotBlank() && it in keys }.toSet().size
     }
 
@@ -372,6 +382,10 @@ object Friend {
                 "sched" -> Store.put("schedPass_${p[1]}", System.currentTimeMillis() + 10 * 60_000L)
                 "relax" -> Store.put("relaxPass", System.currentTimeMillis() + 10 * 60_000L)
                 "scope" -> Store.put("scopePass_${p[1]}", System.currentTimeMillis() + 10 * 60_000L)
+                "fsoff" -> Store.put("fs_${p[1]}", false)
+                "frm" -> remove(p[1])
+                "quorum" -> Store.put("quorum", p[1].toInt())
+                "apponly" -> Store.put("appOnly", false)
                 "dumbfree" -> Dumb.startSession(ctx, p[1].toInt() * 60_000L)
                 "dumboff" -> { Store.dumbOn = false; Store.put("dumbEndW", 0L) }
             }
@@ -806,14 +820,14 @@ object Notify {
             main.post { onStatus(t) }
         }
         if (Store.bool("notifySms")) {
-            friends.filter { it.phone.isNotBlank() }.forEach { f ->
+            friends.filter { it.phone.isNotBlank() && (!Store.bool("appOnly") || it.app) }.forEach { f ->
                 val ok = sendSms(ctx, f.phone, "[단단] $headline\n$detail\n(아래 링크에서 승인해 주세요)", link)
                 val who = if (many) " (${f.name})" else ""
                 synchronized(lines) { lines.add(if (ok) "문자 ✓ 보냈어요$who" else "문자 ✗ 못 보냈어요$who (번호·문자 권한 확인)") }
             }
         }
         if (Store.bool("notifyPush")) {
-            friends.filter { it.topic.isNotBlank() }.forEach { f ->
+            friends.filter { it.topic.isNotBlank() && (!Store.bool("appOnly") || it.app) }.forEach { f ->
                 val who = if (many) " (${f.name})" else ""
                 val idx = synchronized(lines) { lines.add("푸시 … 보내는 중$who"); lines.size - 1 }
                 Thread {

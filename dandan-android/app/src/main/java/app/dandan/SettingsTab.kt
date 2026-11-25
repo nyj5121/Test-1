@@ -90,7 +90,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     val listGate = rememberScopeGate("list_edit")
     var notifyDlg by remember { mutableStateOf(false) }
     var logDlg by remember { mutableStateOf(false) }
-    var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var cfgAsk by remember { mutableStateOf<Triple<String, String, () -> Unit>?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Text("설정", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 8.dp))
@@ -187,9 +187,24 @@ fun SettingsTab(goPerm: () -> Unit) {
                 ) {
                     Pick("${Friend.quorum()}명", (1..Friend.count()).map { "${it}명" to it }) { n ->
                         if (n >= Friend.quorum()) Store.put("quorum", n)
-                        else cfgAsk = Pair<String, () -> Unit>("필요한 동의 수 줄이기: ${n}명", { Store.put("quorum", n) })
+                        else cfgAsk = Triple<String, String, () -> Unit>("필요한 동의 수 줄이기: ${n}명", "quorum:$n", { })
                     }
                 }
+            }
+            Row2(
+                "앱 연결 친구만 승인 가능",
+                if (Store.bool("appOnly")) "켜짐 — 웹 링크로는 승인이 안 돼요. 링크를 내가 눌러도 소용없어요"
+                else "켜면 단단 앱끼리 연결한 친구만 승인할 수 있어요 (링크를 내가 눌러서 푸는 걸 막아요)"
+            ) {
+                Switch(
+                    checked = Store.bool("appOnly"),
+                    onCheckedChange = { want ->
+                        if (want) {
+                            if (Friend.list().any { it.app }) Store.put("appOnly", true)
+                            else toast(ctx, "먼저 친구 탭에서 단단 앱끼리 연결한 친구가 있어야 해요")
+                        } else cfgAsk = Triple<String, String, () -> Unit>("웹 링크 승인 다시 허용", "apponly", { })
+                    }
+                )
             }
             Text(
                 "아래 옵션을 켜면 그 상황에서 내가 아니라 친구가 풀지 말지 결정해요. 옵션을 끄거나 친구를 끊을 때도 친구 승인이 필요해요.",
@@ -202,7 +217,7 @@ fun SettingsTab(goPerm: () -> Unit) {
                         checked = Store.bool("fs_$key"),
                         onCheckedChange = { want ->
                             if (want) Friend.enableScope(key)
-                            else cfgAsk = Pair<String, () -> Unit>("옵션 끄기: $title", { Store.put("fs_$key", false) })
+                            else cfgAsk = Triple<String, String, () -> Unit>("옵션 끄기: $title", "fsoff:$key", { })
                         }
                     )
                 }
@@ -245,7 +260,7 @@ fun SettingsTab(goPerm: () -> Unit) {
                                 Text(f.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
                                     friendSetup = false
-                                    cfgAsk = Pair<String, () -> Unit>("친구 끊기: ${f.name}", { Friend.remove(f.pk) })
+                                    cfgAsk = Triple<String, String, () -> Unit>("친구 끊기: ${f.name}", "frm:${f.pk}", { })
                                 }) { Text("끊기") }
                             }
                         }
@@ -257,7 +272,7 @@ fun SettingsTab(goPerm: () -> Unit) {
                             toast(ctx, "친구는 ${Friend.MAX_FRIENDS}명까지 등록할 수 있어요")
                         } else {
                             friendSetup = false
-                            cfgAsk = Pair<String, () -> Unit>("친구 추가", { friendAdd = true; friendSetup = true })
+                            cfgAsk = Triple<String, String, () -> Unit>("친구 추가", "scope:friend_add", { friendAdd = true; friendSetup = true })
                         }
                     }) { Text("친구 추가") }
                 },
@@ -269,9 +284,9 @@ fun SettingsTab(goPerm: () -> Unit) {
     }
     cfgAsk?.let { pair ->
         FriendRequestDialog(
-            kind = "cfg_change", label = pair.first, param = "0",
+            kind = "cfg_change", label = pair.first, param = "0", effect = pair.second,
             onDismiss = { cfgAsk = null },
-            onApproved = { cfgAsk = null; pair.second() }
+            onApproved = { cfgAsk = null; pair.third() }
         )
     }
     if (relaxAsk.value) {

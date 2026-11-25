@@ -55,7 +55,7 @@ fun DumbTab(goPerm: () -> Unit) {
     var policy by remember { mutableStateOf(false) }
     var freeAsk by remember { mutableStateOf(false) }
     var addWin by remember { mutableStateOf(false) }
-    var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var cfgAsk by remember { mutableStateOf<Triple<String, String, () -> Unit>?>(null) }
     var startDlg by remember { mutableStateOf(false) }
     var tickN by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(1000); tickN++ } }
@@ -105,10 +105,7 @@ fun DumbTab(goPerm: () -> Unit) {
                         want && !Perm.accessibility(ctx) -> { goPerm() }
                         want -> { startDlg = true }
                         Friend.scopeOn("dumb_release") || friendCtl -> {
-                            cfgAsk = Pair<String, () -> Unit>("바보폰 끄기", {
-                                Store.dumbOn = false
-                                Store.put("dumbEndW", 0L)
-                            })
+                            cfgAsk = Triple<String, String, () -> Unit>("바보폰 끄기", "dumboff", { })
                         }
                         Dumb.periodSet() -> {
                             toast(ctx, "정한 기간이 끝날 때까지 끌 수 없어요 (${Fmt.span(Dumb.periodRemainMs(ctx))} 남음)")
@@ -138,7 +135,7 @@ fun DumbTab(goPerm: () -> Unit) {
                         if (!Friend.registered()) toast(ctx, "먼저 설정 탭에서 친구를 등록하세요")
                         else Friend.enableScope("dumb_policy")
                     } else {
-                        cfgAsk = Pair<String, () -> Unit>("옵션 끄기: 바보폰 자유 시간", { Store.put("fs_dumb_policy", false) })
+                        cfgAsk = Triple<String, String, () -> Unit>("옵션 끄기: 바보폰 자유 시간", "fsoff:dumb_policy", { })
                     }
                 }
             )
@@ -158,7 +155,7 @@ fun DumbTab(goPerm: () -> Unit) {
                         if (!Friend.registered()) toast(ctx, "먼저 설정 탭에서 친구를 등록하세요")
                         else Friend.enableScope("dumb_release")
                     } else {
-                        cfgAsk = Pair<String, () -> Unit>("옵션 끄기: 바보폰 해제 승인", { Store.put("fs_dumb_release", false) })
+                        cfgAsk = Triple<String, String, () -> Unit>("옵션 끄기: 바보폰 해제 승인", "fsoff:dumb_release", { })
                     }
                 }
             )
@@ -269,9 +266,9 @@ fun DumbTab(goPerm: () -> Unit) {
     if (freeAsk) FreeAskFlow { freeAsk = false }
     cfgAsk?.let { pair ->
         FriendRequestDialog(
-            kind = "cfg_change", label = pair.first, param = "0",
+            kind = "cfg_change", label = pair.first, param = "0", effect = pair.second,
             onDismiss = { cfgAsk = null },
-            onApproved = { cfgAsk = null; pair.second() }
+            onApproved = { cfgAsk = null; pair.third() }
         )
     }
 }
