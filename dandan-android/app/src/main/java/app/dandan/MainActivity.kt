@@ -51,7 +51,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -159,10 +161,14 @@ fun MainScreen(finishedFlag: Boolean, dismissFinished: () -> Unit) {
 private fun Header() {
     Store.rev.intValue
     val ctx = LocalContext.current
-    var t by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { while (true) { delay(15_000); t++ } }
-    t.hashCode()
-    val usage = Apps.usageTodayMs(ctx)
+    var usage by remember { mutableStateOf<Long?>(null) }
+    // 사용 통계 조회는 느릴 수 있어서 화면을 막지 않게 따로 읽는다
+    LaunchedEffect(Unit) {
+        while (true) {
+            usage = withContext(Dispatchers.Default) { Apps.usageTodayMs(ctx) }
+            delay(15_000)
+        }
+    }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically

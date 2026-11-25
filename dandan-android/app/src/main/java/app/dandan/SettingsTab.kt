@@ -160,7 +160,7 @@ fun SettingsTab(goPerm: () -> Unit) {
                 SubSwitch("최근 앱 진입 방지", Store.ironRecents) { if (it || canRelax(ctx)) Store.ironRecents = it }
                 SubSwitch("전원 메뉴 방지", Store.ironPower) { if (it || canRelax(ctx)) Store.ironPower = it }
                 SubSwitch("상태바·알림창 차단", Store.ironStatus) { if (it || canRelax(ctx)) Store.ironStatus = it }
-                SubSwitch("팝업 화면 차단", Store.ironPopup) { if (it || canRelax(ctx)) Store.ironPopup = it }
+                SubSwitch("종료·재부팅 창 차단", Store.ironPopup) { if (it || canRelax(ctx)) Store.ironPopup = it }
             }
         }
         HorizontalDivider(Modifier.padding(top = 8.dp))

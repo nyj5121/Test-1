@@ -241,10 +241,11 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
     }
 
     if (askMinutes > 0) {
+        val m = askMinutes   // 창이 닫히면서 값이 지워지기 전에 붙잡아 둔다
         FriendRequestDialog(
-            kind = "promise_extra", label = label, param = askMinutes.toString(),
+            kind = "promise_extra", label = label, param = m.toString(),
             onDismiss = { askMinutes = 0 },
-            onApproved = { applyExtra(pkg, askMinutes, pr); askMinutes = 0; onDone() }
+            onApproved = { applyExtra(pkg, m, pr); onDone() }
         )
     }
     if (pickUnlock) {
@@ -257,12 +258,12 @@ fun Gate(pkg: String, mode: String, onHome: () -> Unit, onDone: () -> Unit) {
         )
     }
     if (askUnlock > 0) {
+        val u = askUnlock
         FriendRequestDialog(
-            kind = "app_unlock", label = label, param = askUnlock.toString(),
+            kind = "app_unlock", label = label, param = u.toString(),
             onDismiss = { askUnlock = 0 },
             onApproved = {
-                Store.put("pass_$pkg", SystemClock.elapsedRealtime() + askUnlock * 60_000L)
-                askUnlock = 0
+                Store.put("pass_$pkg", SystemClock.elapsedRealtime() + u * 60_000L)
                 onDone()
             }
         )

@@ -402,7 +402,7 @@ fun FriendRequestDialog(
                 Button(
                     enabled = code.isNotBlank(),
                     onClick = {
-                        if (Friend.verify(code)) { onDismiss(); onApproved() }
+                        if (Friend.verify(code)) { onApproved(); onDismiss() }
                         else err = "코드가 맞지 않거나 만료됐어요."
                     }
                 ) { Text("확인") }

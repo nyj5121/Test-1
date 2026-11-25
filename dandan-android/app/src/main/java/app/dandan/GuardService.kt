@@ -115,6 +115,7 @@ class GuardService : AccessibilityService() {
             lastRefresh = now
             refreshPkgs()
             Promises.rollover()
+            Store.prune()
         }
 
         if (Engine.finalizeIfDone(this)) {
@@ -157,7 +158,7 @@ class GuardService : AccessibilityService() {
                 goLock()
             }
         } else {
-            if (Dumb.active(this) && fg != packageName && !dumbAllowed(fg)) { openDumb(); return }
+            if (actOk && Dumb.active(this) && fg != packageName && !dumbAllowed(fg)) { openDumb(); return }
             tickPromise(fg)
         }
     }
@@ -213,7 +214,10 @@ class GuardService : AccessibilityService() {
         }
 
         if (pkg == "android") {
-            if (phone != null && Store.ironMode && Store.ironPopup) performGlobalAction(GLOBAL_ACTION_BACK)
+            // 종료·재부팅 확인 창만 닫는다. 그 밖의 시스템 창(공유 창, 권한 창 등)은 허용 앱이 쓸 수 있게 둔다.
+            if (phone != null && Store.ironMode && Store.ironPopup &&
+                (cls.contains("Shutdown", true) || cls.contains("Reboot", true))
+            ) performGlobalAction(GLOBAL_ACTION_BACK)
             return
         }
 
@@ -238,9 +242,13 @@ class GuardService : AccessibilityService() {
         if (pkg == dialerPkg || pkg == smsPkg) return true
         if (pkg.contains("incallui") || pkg.contains("telecom") || pkg.contains("emergency")) return true
         if (pkg == "com.android.phone") return true
+        if (isAlarmApp(pkg)) return true
         if (helperOk(pkg)) return true
         return false
     }
+
+    /** 알람이 울릴 때 끌 수 있어야 해서 시계 앱은 잠금·바보폰 중에도 허용한다. */
+    private fun isAlarmApp(pkg: String): Boolean = pkg.contains("deskclock") || pkg.contains("clockpackage")
 
     private val helperCache = HashMap<String, Boolean>()
 
@@ -327,6 +335,8 @@ class GuardService : AccessibilityService() {
         if (pkg == dialerPkg || pkg == smsPkg) return true
         if (pkg.contains("incallui") || pkg.contains("telecom") || pkg.contains("emergency") || pkg == "com.android.phone") return true
         if (pkg.contains("permissioncontroller")) return true
+        if (isAlarmApp(pkg)) return true
+        if (helperOk(pkg)) return true
         return false
     }
 

@@ -139,7 +139,11 @@ object Store {
         set(v) = put("ringColor", v)
 
     // ---------- 예약 ----------
+    private var schedCache: List<Schedule>? = null
+    private var promCache: List<Promise>? = null
+
     fun schedules(): List<Schedule> {
+        schedCache?.let { return it }
         val arr = try { JSONArray(str("schedules", "[]")) } catch (e: Exception) { JSONArray() }
         val out = ArrayList<Schedule>()
         for (i in 0 until arr.length()) {
@@ -155,6 +159,7 @@ object Store {
                 )
             )
         }
+        schedCache = out
         return out
     }
 
@@ -168,12 +173,14 @@ object Store {
                     .put("once", s.onceStart).put("lk", s.locked)
             )
         }
+        schedCache = l.toList()
         put("schedules", arr.toString())
         Scheduler.reschedule(app)
     }
 
     // ---------- 약속 ----------
     fun promises(): List<Promise> {
+        promCache?.let { return it }
         val arr = try { JSONArray(str("promises", "[]")) } catch (e: Exception) { JSONArray() }
         val out = ArrayList<Promise>()
         for (i in 0 until arr.length()) {
@@ -186,6 +193,7 @@ object Store {
                 )
             )
         }
+        promCache = out
         return out
     }
 
@@ -198,7 +206,22 @@ object Store {
                     .put("created", p.created).put("sig", p.sig)
             )
         }
+        promCache = l.toList()
         put("promises", arr.toString())
+    }
+
+    /** 14일이 지난 날짜별 기록(사용시간, 열기 횟수, 잠금 기록 등)을 지운다. 하루에 한 번만 돈다. */
+    fun prune() {
+        val today = dayKey()
+        if (str("prunedDay") == today) return
+        val cutoff = dayKey(System.currentTimeMillis() - 14 * 86_400_000L)
+        val e = sp.edit()
+        val re = Regex("^(?:u_|o_|bonus_|dUsed_|lm_|dl_)(\\d{8})")
+        for (k in sp.all.keys) {
+            val m = re.find(k) ?: continue
+            if (m.groupValues[1] < cutoff) e.remove(k)
+        }
+        e.putString("prunedDay", today).apply()
     }
 
     // ---------- 사용 기록 ----------

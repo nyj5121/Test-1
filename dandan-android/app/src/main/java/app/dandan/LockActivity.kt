@@ -194,9 +194,13 @@ fun LockScreen(onClose: () -> Unit) {
 }
 
 private fun loadBg(ctx: Context, uri: String) = if (uri.isBlank()) null else try {
-    val o = BitmapFactory.Options().apply { inSampleSize = 2 }
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    ctx.contentResolver.openInputStream(Uri.parse(uri))?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    var sample = 1
+    while (bounds.outWidth / sample > 2000 || bounds.outHeight / sample > 2000) sample *= 2
+    val o = BitmapFactory.Options().apply { inSampleSize = sample }
     ctx.contentResolver.openInputStream(Uri.parse(uri))?.use { BitmapFactory.decodeStream(it, null, o) }?.asImageBitmap()
-} catch (e: Exception) { null }
+} catch (e: Throwable) { null }
 
 @Composable
 private fun QuickApps(ctx: Context) {
