@@ -86,6 +86,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     var deco by remember { mutableStateOf(false) }
     var faq by remember { mutableStateOf(false) }
     var friendSetup by remember { mutableStateOf(false) }
+    var friendAdd by remember { mutableStateOf(false) }
     var notifyDlg by remember { mutableStateOf(false) }
     var logDlg by remember { mutableStateOf(false) }
     var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
@@ -168,7 +169,7 @@ fun SettingsTab(goPerm: () -> Unit) {
         Section("친구 해제")
         Row2(
             "친구",
-            if (Friend.registered()) "${Friend.name()} 등록됨" else "친구 한 명을 정하면 해제를 친구가 결정해요",
+            if (Friend.registered()) "${Friend.name()} 등록됨 (${Friend.count()}/${Friend.MAX_FRIENDS}) — 누구든 승인할 수 있어요" else "친구를 정하면 해제를 친구가 결정해요. 여러 명도 돼요",
             onClick = { friendSetup = true }
         ) { Text("›", fontSize = 20.sp) }
         if (Friend.registered()) {
@@ -215,23 +216,42 @@ fun SettingsTab(goPerm: () -> Unit) {
     if (notifyDlg) NotifyDialog { notifyDlg = false }
     if (logDlg) LockLogDialog { logDlg = false }
     if (friendSetup) {
-        if (Friend.registered()) {
+        if (Friend.registered() && !friendAdd) {
             AlertDialog(
                 onDismissRequest = { friendSetup = false },
-                title = { Text("친구: ${Friend.name()}") },
+                title = { Text("친구 ${Friend.count()}명") },
                 text = {
-                    Text("친구를 끊으려면 ${Friend.name()}의 승인이 필요해요. 친구가 열쇠를 잃어버리면 옵션을 끌 수 없을 수 있으니, 친구가 연결 페이지의 '백업'을 해 두게 하세요.")
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text(
+                            "등록된 친구 누구든 승인할 수 있어요. 요청은 모두에게 가고, 한 명이 승인하면 나머지 링크는 닫혀요. " +
+                                "친구를 더하거나 끊을 때도 친구 승인이 필요해요. 친구가 열쇠를 잃어버릴 수 있으니 연결 페이지의 '백업'을 해 두게 하세요.",
+                            fontSize = 13.sp
+                        )
+                        Friend.list().forEach { f ->
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                Text(f.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                TextButton(onClick = {
+                                    friendSetup = false
+                                    cfgAsk = Pair<String, () -> Unit>("친구 끊기: ${f.name}", { Friend.remove(f.pk) })
+                                }) { Text("끊기") }
+                            }
+                        }
+                    }
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        friendSetup = false
-                        cfgAsk = Pair<String, () -> Unit>("친구 연결 끊기", { Friend.unregister() })
-                    }) { Text("친구 끊기") }
+                        if (Friend.count() >= Friend.MAX_FRIENDS) {
+                            toast(ctx, "친구는 ${Friend.MAX_FRIENDS}명까지 등록할 수 있어요")
+                        } else {
+                            friendSetup = false
+                            cfgAsk = Pair<String, () -> Unit>("친구 추가", { friendAdd = true; friendSetup = true })
+                        }
+                    }) { Text("친구 추가") }
                 },
                 dismissButton = { TextButton(onClick = { friendSetup = false }) { Text("닫기") } }
             )
         } else {
-            FriendSetupDialog { friendSetup = false }
+            FriendSetupDialog { friendSetup = false; friendAdd = false }
         }
     }
     cfgAsk?.let { pair ->
@@ -243,11 +263,10 @@ fun SettingsTab(goPerm: () -> Unit) {
     }
     if (relaxAsk.value) {
         FriendRequestDialog(
-            kind = "relax", label = "잠금 강도 설정", param = "0",
+            kind = "relax", label = "잠금 강도 설정", param = "0", effect = "relax",
             onDismiss = { relaxAsk.value = false },
             onApproved = {
                 relaxAsk.value = false
-                Store.put("relaxPass", System.currentTimeMillis() + 10 * 60_000L)
                 toast(ctx, "10분 동안 설정을 끌 수 있어요")
             }
         )

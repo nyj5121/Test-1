@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.os.SystemClock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -329,9 +330,9 @@ fun FreeAskFlow(onDismiss: () -> Unit) {
         )
     } else {
         FriendRequestDialog(
-            kind = "dumb_free", label = "바보폰 자유 시간", param = minutes.toString(),
+            kind = "dumb_free", label = "바보폰 자유 시간", param = minutes.toString(), effect = "dumbfree:$minutes",
             onDismiss = onDismiss,
-            onApproved = { Dumb.startSession(ctx, minutes * 60_000L) }
+            onApproved = { }
         )
     }
 }
@@ -340,21 +341,29 @@ fun FreeAskFlow(onDismiss: () -> Unit) {
 @Composable
 fun DumbPolicyDialog(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    var reason by remember { mutableStateOf("") }
-    var made by remember { mutableStateOf(false) }
+    // 요청을 만든 뒤 창을 닫았다가 다시 열면 그 요청을 이어서 보여 준다 (링크가 바뀌지 않게)
+    val open = remember { Store.str("policyTopic").isNotBlank() && Store.long("policyExp") > System.currentTimeMillis() / 1000 }
+    var reason by remember { mutableStateOf(if (open) Store.str("policyReason") else "") }
+    var made by remember { mutableStateOf(open) }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
     var sent by remember { mutableStateOf("") }
     var manual by remember { mutableStateOf(false) }
-    var topic by remember { mutableStateOf("") }
+    var topic by remember { mutableStateOf(if (open) Store.str("policyTopic") else "") }
 
     // 친구가 링크에서 정책을 승인하면 코드가 임시 주소로 오고, 여기서 받아 자동으로 적용한다
     LaunchedEffect(topic) {
         if (topic.isBlank()) return@LaunchedEffect
         while (true) {
+            if (Store.str("policyTopic") != topic) {
+                // 백그라운드에서 이미 적용됐거나 취소됨
+                onDismiss()
+                return@LaunchedEffect
+            }
+            Approvals.uiTs = SystemClock.elapsedRealtime()
             val msgs: List<String> = withContext(Dispatchers.IO) { Relay.fetch(topic) }
             for (m in msgs) {
-                if (Friend.applyPolicy(m) == null) {
+                if (Friend.applyPolicy(m, topic) == null) {
                     toast(ctx, "자유 시간을 적용했어요")
                     onDismiss()
                     return@LaunchedEffect
@@ -380,6 +389,10 @@ fun DumbPolicyDialog(onDismiss: () -> Unit) {
                 if (!made) {
                     Button(enabled = reason.trim().isNotEmpty(), onClick = {
                         val tp = Relay.newTopic()
+                        Relay.postAsync(Store.str("policyTopic"), "DONE")   // 예전 링크는 닫는다
+                        Store.put("policyTopic", tp)
+                        Store.put("policyExp", System.currentTimeMillis() / 1000 + Friend.REQUEST_TTL)
+                        Store.put("policyReason", reason.trim())
                         topic = tp
                         made = true
                         Notify.dispatch(
@@ -399,9 +412,16 @@ fun DumbPolicyDialog(onDismiss: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("다른 앱으로") }
                     }
-                    TextButton(onClick = { made = false; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
+                    Row {
+                        TextButton(onClick = { made = false; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
+                        TextButton(onClick = {
+                            Relay.postAsync(Store.str("policyTopic"), "DONE")
+                            Store.put("policyTopic", "")
+                            onDismiss()
+                        }) { Text("요청 취소") }
+                    }
                     Spacer(Modifier.height(6.dp))
-                    Text("3. 친구가 링크에서 승인하면 자동으로 적용돼요. 이 창을 열어 두세요.", fontSize = 13.sp)
+                    Text("3. 친구가 링크에서 승인하면 자동으로 적용돼요. 이 창은 닫아도 돼요.", fontSize = 13.sp)
                     TextButton(onClick = { manual = !manual }) { Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력") }
                     if (manual) {
                         OutlinedTextField(
@@ -419,7 +439,7 @@ fun DumbPolicyDialog(onDismiss: () -> Unit) {
                 Button(
                     enabled = code.isNotBlank(),
                     onClick = {
-                        val e = Friend.applyPolicy(code)
+                        val e = Friend.applyPolicy(code, topic)
                         if (e == null) { toast(ctx, "자유 시간을 적용했어요"); onDismiss() } else err = e
                     }
                 ) { Text("적용") }

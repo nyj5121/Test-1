@@ -115,12 +115,9 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
     if (policyAsk) DumbPolicyDialog { policyAsk = false }
     if (offAsk) {
         FriendRequestDialog(
-            kind = "cfg_change", label = "바보폰 끄기", param = "0",
+            kind = "cfg_change", label = "바보폰 끄기", param = "0", effect = "dumboff",
             onDismiss = { offAsk = false },
-            onApproved = {
-                Store.dumbOn = false
-                Store.put("dumbEndW", 0L)
-            }
+            onApproved = { }
         )
     }
 }

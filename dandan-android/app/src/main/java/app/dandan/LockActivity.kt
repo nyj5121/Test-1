@@ -186,9 +186,9 @@ fun LockScreen(onClose: () -> Unit) {
     if (emergency) EmergencyDialog(ctx, onDismiss = { emergency = false })
     if (friendAsk) {
         FriendRequestDialog(
-            kind = "phone_unlock", label = "폰 잠금", param = "0", allowShare = false,
+            kind = "phone_unlock", label = "폰 잠금", param = "0", allowShare = false, effect = "phone",
             onDismiss = { friendAsk = false },
-            onApproved = { friendAsk = false; Engine.releaseByFriend(ctx) }
+            onApproved = { friendAsk = false }
         )
     }
 }

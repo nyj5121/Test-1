@@ -8,6 +8,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
+import android.os.SystemClock
 import android.os.Looper
 import android.telephony.SmsManager
 import android.util.Base64
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +27,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -35,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -107,11 +111,11 @@ object Friend {
     }
 
     /** 친구가 만든 정책 코드("정책.서명")를 검증해 적용한다. 성공하면 null, 실패하면 이유를 돌려준다. */
-    fun applyPolicy(code: String): String? {
+    fun applyPolicy(code: String, topic: String = ""): String? {
         val parts = code.trim().split(".")
         if (parts.size != 2) return "코드 형식이 올바르지 않아요."
         val policy = try { String(dec(parts[0]), Charsets.UTF_8) } catch (e: Exception) { return "코드를 읽을 수 없어요." }
-        if (!verifyRaw(Store.str("friendPk"), policy, parts[1])) return "친구가 만든 코드가 아니에요."
+        if (signer(policy, parts[1]) == null) return "친구가 만든 코드가 아니에요."
         val p = policy.split("|")
         if (p.size < 6 || p[0] != "p1") return "정책 형식이 올바르지 않아요."
         if (p[1] != deviceId()) return "이 폰용 코드가 아니에요."
@@ -122,12 +126,70 @@ object Friend {
         Store.put("dumbWins", Dumb.encode(Dumb.parse(p[4])))
         Store.put("dumbExp", exp)
         Store.put("dumbVer", ver)
+        if (topic.isNotBlank() && Store.str("policyTopic") == topic) Store.put("policyTopic", "")
+        Relay.postAsync(topic, "DONE")
         return null
     }
 
     fun base(): String = Store.str("friendBase", BASE_DEFAULT)
-    fun registered(): Boolean = Store.str("friendPk").isNotBlank()
-    fun name(): String = Store.str("friendName", "친구")
+    /** 등록된 친구. 열쇠(pk)로 구분하고, 알림 받을 번호·주제도 친구마다 따로 둔다. */
+    data class Pal(val name: String, val pk: String, val phone: String = "", val topic: String = "")
+
+    const val MAX_FRIENDS = 5
+
+    /** 요청이 유효한 시간(초). 친구가 바로 못 볼 수도 있어서 하루로 둔다. */
+    const val REQUEST_TTL = 24 * 3600L
+    private var palRaw = "\u0000"
+    private var palCache: List<Pal> = emptyList()
+
+    fun list(): List<Pal> {
+        var raw = Store.str("friends")
+        if (raw.isBlank() && Store.str("friendPk").isNotBlank()) {
+            // 예전 버전(친구 한 명) 정보를 목록으로 옮긴다
+            val one = Pal(
+                Store.str("friendName", "친구"), Store.str("friendPk"),
+                Store.str("friendPhone"), Store.str("friendTopic")
+            )
+            saveList(listOf(one))
+            Store.put("friendPk", "")
+            raw = Store.str("friends")
+        }
+        if (raw == palRaw) return palCache
+        val out = ArrayList<Pal>()
+        try {
+            val a = JSONArray(raw.ifBlank { "[]" })
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                out.add(Pal(o.optString("n", "친구"), o.optString("k"), o.optString("p"), o.optString("t")))
+            }
+        } catch (e: Exception) { }
+        palRaw = raw
+        palCache = out.filter { it.pk.isNotBlank() }
+        return palCache
+    }
+
+    fun saveList(l: List<Pal>) {
+        val a = JSONArray()
+        l.forEach { a.put(JSONObject().put("n", it.name).put("k", it.pk).put("p", it.phone).put("t", it.topic)) }
+        Store.put("friends", a.toString())
+    }
+
+    fun count(): Int = list().size
+    fun registered(): Boolean = list().isNotEmpty()
+
+    /** 화면에 쓰는 이름: 한 명이면 이름, 두 명이면 "A·B", 그 이상이면 "친구 N명". */
+    fun name(): String {
+        val l = list()
+        return when {
+            l.isEmpty() -> "친구"
+            l.size == 1 -> l[0].name
+            l.size == 2 -> l[0].name + "·" + l[1].name
+            else -> "친구 ${l.size}명"
+        }
+    }
+
+    /** 서명이 등록된 친구 중 누구의 것인지 찾는다. 아무도 아니면 null. */
+    fun signer(message: String, sigB64: String): Pal? = list().firstOrNull { verifyRaw(it.pk, message, sigB64) }
     fun myName(): String = Store.str("myName", "나")
     fun scopeOn(s: String): Boolean = registered() && Store.bool("fs_$s")
 
@@ -157,14 +219,17 @@ object Friend {
     }
 
     /** 새 요청을 만든다. 사유도 서명 대상에 들어가서 친구가 본 사유를 나중에 바꿀 수 없다. */
-    fun newRequest(kind: String, label: String, param: String, reason: String): String {
+    fun newRequest(kind: String, label: String, param: String, reason: String, effect: String = ""): String {
         val now = System.currentTimeMillis() / 1000
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val req = listOf(
-            "d1", kind, clean(label), param, enc(nonce), (now + 30 * 60).toString(),
+            "d1", kind, clean(label), param, enc(nonce), (now + REQUEST_TTL).toString(),
             clean(myName()), cleanReason(reason)
         ).joinToString("|")
+        // 이전 요청이 아직 열려 있었다면 그 링크는 더 못 쓰게 닫는다
+        if (Store.str("friendPending").isNotBlank()) Relay.postAsync(Store.str("friendReply"), "DONE")
         Store.put("friendPending", req)
+        Store.put("friendEffect", effect)
         Store.put("friendReply", Relay.newTopic())
         return req
     }
@@ -203,18 +268,78 @@ object Friend {
         "[단단] ${myName()}의 요청\n${summary(req)}\n사유: ${reasonOf(req).ifBlank { "(없음)" }}\n\n" +
             "승인하려면 링크를 열어 주세요 ↓\n${link(req)}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
 
+    /** 친구를 추가한다. 같은 열쇠가 이미 있으면 이름만 바꾸고, 다섯 명이 넘으면 거절한다. */
     fun register(name: String, pkCode: String): Boolean = try {
         val bytes = dec(pkCode)
         KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(bytes))
-        Store.put("friendPk", enc(bytes))
-        Store.put("friendName", name.trim().ifBlank { "친구" })
-        true
+        val pk = enc(bytes)
+        val nm = clean(name).ifBlank { "친구" }
+        val cur = list()
+        val same = cur.indexOfFirst { it.pk == pk }
+        if (same >= 0) {
+            saveList(cur.mapIndexed { i, f -> if (i == same) f.copy(name = nm) else f })
+            true
+        } else if (cur.size >= MAX_FRIENDS) {
+            false
+        } else {
+            saveList(cur + Pal(nm, pk))
+            true
+        }
     } catch (e: Exception) { false }
 
-    fun unregister() {
+    /** 알림 번호·주제를 저장한다(열쇠로 맞춰서 갱신). */
+    fun updateContacts(rows: List<Pal>) {
+        saveList(list().map { f -> rows.firstOrNull { it.pk == f.pk }?.copy(name = f.name) ?: f })
+    }
+
+    fun remove(pk: String) {
+        val left = list().filter { it.pk != pk }
+        saveList(left)
+        if (left.isEmpty()) clearAll()
+    }
+
+    fun unregister() { saveList(emptyList()); clearAll() }
+
+    private fun clearAll() {
         Store.put("friendPk", "")
         Store.put("friendPending", "")
         SCOPES.forEach { Store.put("fs_${it.first}", false) }
+    }
+
+    /** 지금 걸어 둔 요청을 취소한다. 친구들이 받은 링크도 '처리됨'으로 닫힌다. */
+    fun cancel() {
+        if (Store.str("friendPending").isNotBlank()) Relay.postAsync(Store.str("friendReply"), "DONE")
+        Store.put("friendPending", "")
+        Store.put("friendEffect", "")
+    }
+
+    /**
+     * 승인되면 저절로 적용되는 일. 요청 창을 닫아도 [Approvals]가 승인을 받아 이걸 실행한다.
+     * 형식: "종류:값:값". 모르는 종류는 무시한다.
+     */
+    fun applyEffect(ctx: Context, effect: String) {
+        val p = effect.split(":")
+        try {
+            when (p[0]) {
+                "extra" -> {
+                    val pkg = p[1]
+                    val minutes = p[2].toInt()
+                    val pr = Store.promises().firstOrNull { it.pkg == pkg }
+                    if (pr != null) {
+                        val k = "bonus_${Store.dayKey()}_$pkg"
+                        Store.put(k, Store.int(k) + if (pr.unit == "time") minutes else 1)
+                    }
+                    Store.put("grant_$pkg", SystemClock.elapsedRealtime() + minutes * 60_000L)
+                    Store.addOpen(pkg)
+                }
+                "unlock" -> Store.put("pass_${p[1]}", SystemClock.elapsedRealtime() + p[2].toInt() * 60_000L)
+                "phone" -> Engine.releaseByFriend(ctx)
+                "sched" -> Store.put("schedPass_${p[1]}", System.currentTimeMillis() + 10 * 60_000L)
+                "relax" -> Store.put("relaxPass", System.currentTimeMillis() + 10 * 60_000L)
+                "dumbfree" -> Dumb.startSession(ctx, p[1].toInt() * 60_000L)
+                "dumboff" -> { Store.dumbOn = false; Store.put("dumbEndW", 0L) }
+            }
+        } catch (e: Exception) { }
     }
 
     /** 웹의 서명은 r||s 64바이트이고, 자바는 DER를 기대해서 바꿔 준다. */
@@ -242,16 +367,26 @@ object Friend {
         }
     } catch (e: Exception) { false }
 
-    /** 승인 코드가 지금 걸어 둔 요청에 대한 친구의 서명이면 true. 한 번 쓰면 요청은 폐기된다. */
+    /** 마지막으로 승인한 친구의 이름(안내 문구용) */
+    var lastApprover: String = ""
+        private set
+
+    /**
+     * 승인 코드가 지금 걸어 둔 요청에 대한 등록된 친구 중 누군가의 서명이면 true.
+     * 한 번 쓰면 요청은 폐기되고, 같은 요청을 받은 다른 친구들의 링크도 '처리됨'으로 닫힌다.
+     */
     fun verify(code: String): Boolean {
         val pending = Store.str("friendPending")
         if (pending.isBlank()) return false
         val p = pending.split("|")
         val exp = p.getOrNull(5)?.toLongOrNull() ?: return false
         if (System.currentTimeMillis() / 1000 > exp) return false
-        val ok = verifyRaw(Store.str("friendPk"), pending, code)
-        if (ok) Store.put("friendPending", "")
-        return ok
+        val who = signer(pending, code) ?: return false
+        lastApprover = who.name
+        Store.put("friendPending", "")
+        Store.put("friendEffect", "")
+        Relay.postAsync(Store.str("friendReply"), "DONE")
+        return true
     }
 }
 
@@ -328,6 +463,7 @@ fun FriendRequestDialog(
     label: String,
     param: String,
     allowShare: Boolean = true,
+    effect: String = "",
     onDismiss: () -> Unit,
     onApproved: () -> Unit
 ) {
@@ -346,14 +482,25 @@ fun FriendRequestDialog(
         if (r == null) return@LaunchedEffect
         val exp = r.split("|").getOrNull(5)?.toLongOrNull() ?: 0L
         while (true) {
+            val cur = Store.str("friendPending")
+            if (cur.isBlank()) {
+                // 백그라운드에서 이미 승인돼 적용됐다
+                onApproved(); onDismiss(); return@LaunchedEffect
+            }
+            if (cur != r) { onDismiss(); return@LaunchedEffect }
             if (System.currentTimeMillis() / 1000 > exp) {
                 waitNote = "요청 시간이 지났어요. 아래 '사유 고쳐서 다시 만들기'를 눌러 주세요."
                 return@LaunchedEffect
             }
+            Approvals.uiTs = SystemClock.elapsedRealtime()
             val topic = Store.str("friendReply")
             val msgs: List<String> = if (topic.isBlank()) emptyList() else withContext(Dispatchers.IO) { Relay.fetch(topic) }
             for (m in msgs) {
-                if (Friend.verify(m)) { onApproved(); onDismiss(); return@LaunchedEffect }
+                if (Friend.verify(m)) {
+                    if (effect.isNotBlank()) Friend.applyEffect(ctx, effect)
+                    if (Friend.count() > 1) toast(ctx, "${Friend.lastApprover}이(가) 승인했어요")
+                    onApproved(); onDismiss(); return@LaunchedEffect
+                }
             }
             delay(6000)
         }
@@ -376,7 +523,7 @@ fun FriendRequestDialog(
                     Button(
                         enabled = reason.trim().isNotEmpty(),
                         onClick = {
-                            val nr = Friend.newRequest(kind, label, param, reason)
+                            val nr = Friend.newRequest(kind, label, param, reason, effect)
                             req = nr
                             waitNote = "친구의 승인을 기다리는 중…"
                             Notify.dispatch(ctx, Friend.headline(nr), "사유: " + Friend.reasonOf(nr), Friend.link(nr)) { sent = it }
@@ -385,6 +532,10 @@ fun FriendRequestDialog(
                     Text(
                         if (Notify.any()) "만들면 ${Friend.name()}에게 자동으로 알림이 가요."
                         else "자동 알림이 꺼져 있어요. 설정 → 친구 해제 → 알림 방법에서 켜면 자동으로 가요.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (Friend.count() > 1) Text(
+                        "친구가 여럿이라 모두에게 같은 링크가 가요. 한 명이 승인하면 나머지 링크는 '이미 처리됨'으로 닫혀요.",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
@@ -413,9 +564,16 @@ fun FriendRequestDialog(
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = { req = null; code = ""; err = ""; sent = ""; manual = false }) { Text("사유 고쳐서 다시 만들기") }
+                    Row {
+                        TextButton(onClick = { req = null; code = ""; err = ""; sent = ""; manual = false }) { Text("사유 고쳐서 다시 만들기") }
+                        TextButton(onClick = { Friend.cancel(); onDismiss() }) { Text("요청 취소") }
+                    }
                     Spacer(Modifier.height(6.dp))
-                    Text("3. 친구가 링크에서 '승인'을 누르면 자동으로 적용돼요. 이 창을 열어 두세요.", fontSize = 13.sp)
+                    Text(
+                        if (effect.isNotBlank()) "3. 친구가 링크에서 '승인'을 누르면 자동으로 적용돼요. 이 창은 닫아도 돼요."
+                        else "3. 친구가 링크에서 '승인'을 누르면 자동으로 적용돼요. 이 창을 열어 두세요.",
+                        fontSize = 13.sp
+                    )
                     Text(waitNote, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
                     TextButton(onClick = { manual = !manual }) {
                         Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력")
@@ -429,7 +587,7 @@ fun FriendRequestDialog(
                     }
                     if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                     Text(
-                        "30분 안에 승인받아야 해요.",
+                        "요청은 24시간 동안 유효해요. 이 창을 닫아도 승인되면 단단이 알아서 적용해요.",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -440,7 +598,10 @@ fun FriendRequestDialog(
                 Button(
                     enabled = code.isNotBlank(),
                     onClick = {
-                        if (Friend.verify(code)) { onApproved(); onDismiss() }
+                        if (Friend.verify(code)) {
+                            if (effect.isNotBlank()) Friend.applyEffect(ctx, effect)
+                            onApproved(); onDismiss()
+                        }
                         else err = "코드가 맞지 않거나 만료됐어요."
                     }
                 ) { Text("확인") }
@@ -479,7 +640,7 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("친구 등록") },
+        title = { Text(if (Friend.registered()) "친구 추가 (${Friend.count()}/${Friend.MAX_FRIENDS})" else "친구 등록") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("1. 이름을 정하고 친구에게 초대 링크를 보내세요.", fontSize = 13.sp)
@@ -517,7 +678,7 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
                 onClick = {
                     Store.put("myName", me.trim().ifBlank { "나" })
                     if (Friend.register(friend, code)) { toast(ctx, "친구를 등록했어요"); onDismiss() }
-                    else err = "연결 코드가 올바르지 않아요."
+                    else err = if (Friend.count() >= Friend.MAX_FRIENDS) "친구는 ${Friend.MAX_FRIENDS}명까지 등록할 수 있어요." else "연결 코드가 올바르지 않아요."
                 }
             ) { Text("등록") }
         },
@@ -537,8 +698,8 @@ internal fun kakaoText(ctx: Context, text: String) {
 
 /** 친구에게 자동으로 알림을 보낸다: 문자(친구 번호)와 푸시(ntfy 주제). 둘 다 설정한 만큼 켜진다. */
 object Notify {
-    fun smsOn(): Boolean = Store.bool("notifySms") && Store.str("friendPhone").isNotBlank()
-    fun pushOn(): Boolean = Store.bool("notifyPush") && Store.str("friendTopic").isNotBlank()
+    fun smsOn(): Boolean = Store.bool("notifySms") && Friend.list().any { it.phone.isNotBlank() }
+    fun pushOn(): Boolean = Store.bool("notifyPush") && Friend.list().any { it.topic.isNotBlank() }
     fun any(): Boolean = smsOn() || pushOn()
 
     fun newTopic(): String {
@@ -561,27 +722,31 @@ object Notify {
         if (!any()) { onStatus(""); return }
         val lines = ArrayList<String>()
         val main = Handler(Looper.getMainLooper())
+        val friends = Friend.list()
+        val many = friends.size > 1
         fun publish() {
             val t = synchronized(lines) { lines.joinToString("\n") }
             main.post { onStatus(t) }
         }
-        if (smsOn()) {
-            val ok = sendSms(ctx, Store.str("friendPhone"), "[단단] $headline\n$detail\n(아래 링크에서 승인해 주세요)", link)
-            lines.add(if (ok) "문자 ✓ 보냈어요" else "문자 ✗ 못 보냈어요 (번호·문자 권한 확인)")
+        if (Store.bool("notifySms")) {
+            friends.filter { it.phone.isNotBlank() }.forEach { f ->
+                val ok = sendSms(ctx, f.phone, "[단단] $headline\n$detail\n(아래 링크에서 승인해 주세요)", link)
+                val who = if (many) " (${f.name})" else ""
+                synchronized(lines) { lines.add(if (ok) "문자 ✓ 보냈어요$who" else "문자 ✗ 못 보냈어요$who (번호·문자 권한 확인)") }
+            }
         }
-        if (pushOn()) {
-            val idx = lines.size
-            val topic = Store.str("friendTopic")
-            lines.add("푸시 … 보내는 중")
-            publish()
-            Thread {
-                val ok = sendPush(topic, headline, detail, link)
-                synchronized(lines) { lines[idx] = if (ok) "푸시 ✓ 보냈어요" else "푸시 ✗ 못 보냈어요 (인터넷 확인)" }
-                publish()
-            }.start()
-        } else {
-            publish()
+        if (Store.bool("notifyPush")) {
+            friends.filter { it.topic.isNotBlank() }.forEach { f ->
+                val who = if (many) " (${f.name})" else ""
+                val idx = synchronized(lines) { lines.add("푸시 … 보내는 중$who"); lines.size - 1 }
+                Thread {
+                    val ok = sendPush(f.topic, headline, detail, link)
+                    synchronized(lines) { lines[idx] = if (ok) "푸시 ✓ 보냈어요$who" else "푸시 ✗ 못 보냈어요$who (인터넷 확인)" }
+                    publish()
+                }.start()
+            }
         }
+        publish()
     }
 
     @Suppress("DEPRECATION")
@@ -630,14 +795,13 @@ object Notify {
     }
 }
 
-/** 친구 알림 방법 설정: 문자 자동 전송, 푸시(ntfy). */
+/** 친구 알림 방법 설정: 문자 자동 전송, 푸시(ntfy). 친구마다 번호와 주제를 따로 둔다. */
 @Composable
 fun NotifyDialog(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    var phone by remember { mutableStateOf(Store.str("friendPhone")) }
+    val rows = remember { mutableStateListOf<Friend.Pal>().also { it.addAll(Friend.list()) } }
     var sms by remember { mutableStateOf(Store.bool("notifySms")) }
     var push by remember { mutableStateOf(Store.bool("notifyPush")) }
-    var topic by remember { mutableStateOf(Store.str("friendTopic")) }
     var status by remember { mutableStateOf("") }
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (!ok) {
@@ -646,10 +810,9 @@ fun NotifyDialog(onDismiss: () -> Unit) {
         }
     }
     fun save() {
-        Store.put("friendPhone", phone.filter { it.isDigit() || it == '+' })
         Store.put("notifySms", sms)
         Store.put("notifyPush", push)
-        Store.put("friendTopic", topic.trim())
+        Friend.updateContacts(rows.map { it.copy(phone = it.phone.filter { c -> c.isDigit() || c == '+' }, topic = it.topic.trim()) })
     }
 
     AlertDialog(
@@ -658,7 +821,7 @@ fun NotifyDialog(onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "요청을 만들면 켜 둔 방법으로 친구에게 자동으로 가요. 둘 다 켜도 돼요.",
+                    "요청을 만들면 켜 둔 방법으로 친구 모두에게 자동으로 가요. 둘 다 켜도 돼요.",
                     fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
@@ -677,36 +840,40 @@ fun NotifyDialog(onDismiss: () -> Unit) {
                         }
                     })
                 }
-                OutlinedTextField(
-                    phone, { phone = it }, label = { Text("친구 전화번호") }, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("푸시 알림 (ntfy)", fontWeight = FontWeight.Bold)
                         Text(
-                            "친구가 무료 앱 ntfy를 깔고 아래 주제를 한 번 구독해야 해요. 내용은 ntfy 서버를 거쳐요.",
+                            "친구가 무료 앱 ntfy를 깔고 자기 주제를 한 번 구독해야 해요. 내용은 ntfy 서버를 거쳐요.",
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Switch(checked = push, onCheckedChange = { want ->
                         push = want
-                        if (want && topic.isBlank()) topic = Notify.newTopic()
+                        if (want) for (i in rows.indices) if (rows[i].topic.isBlank()) rows[i] = rows[i].copy(topic = Notify.newTopic())
                     })
                 }
-                OutlinedTextField(
-                    topic, { topic = it }, label = { Text("주제 이름 (비밀번호처럼 다루세요)") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { topic = Notify.newTopic() }) { Text("새 주제") }
-                    OutlinedButton(onClick = {
-                        if (topic.isBlank()) topic = Notify.newTopic()
-                        save()
-                        shareText(ctx, Notify.subscribeText(topic))
-                    }) { Text("구독 방법 보내기") }
+                rows.forEachIndexed { i, f ->
+                    Spacer(Modifier.height(14.dp))
+                    HorizontalDivider()
+                    Text(f.name, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                    OutlinedTextField(
+                        f.phone, { rows[i] = f.copy(phone = it) }, label = { Text("${f.name} 전화번호") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        f.topic, { rows[i] = f.copy(topic = it) }, label = { Text("${f.name} 푸시 주제 (비밀번호처럼)") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { rows[i] = f.copy(topic = Notify.newTopic()) }) { Text("새 주제") }
+                        OutlinedButton(onClick = {
+                            val t = f.topic.ifBlank { Notify.newTopic().also { n -> rows[i] = f.copy(topic = n) } }
+                            shareText(ctx, Notify.subscribeText(t))
+                        }) { Text("구독 방법 보내기") }
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(onClick = {
@@ -724,12 +891,79 @@ fun NotifyDialog(onDismiss: () -> Unit) {
     )
 }
 
+/**
+ * 요청 창을 닫아도 승인을 받아 적용하는 백그라운드 확인기. GuardService가 1초마다 부른다.
+ * 요청 창이 열려 있으면 거기서 직접 받으니 쉬어서 서버에 부담을 주지 않는다.
+ */
+object Approvals {
+    @Volatile var uiTs = 0L
+    private var last = 0L
+    private var busy = false
+
+    fun tick(ctx: Context) {
+        val el = SystemClock.elapsedRealtime()
+        if (busy || el - last < 10_000 || el - uiTs < 15_000) return
+        val wall = System.currentTimeMillis()
+        val pending = Store.str("friendPending")
+        val exp = pending.split("|").getOrNull(5)?.toLongOrNull() ?: 0L
+        val doReq = pending.isNotBlank() && Store.str("friendEffect").isNotBlank() && exp > wall / 1000
+        val polTopic = Store.str("policyTopic")
+        val doPol = polTopic.isNotBlank() && Store.long("policyExp") > wall / 1000
+        if (!doReq && !doPol) return
+        last = el
+        busy = true
+        val app = ctx.applicationContext
+        val reqTopic = Store.str("friendReply")
+        Thread {
+            val a: List<String> = if (doReq) Relay.fetch(reqTopic) else emptyList()
+            val b: List<String> = if (doPol) Relay.fetch(polTopic) else emptyList()
+            Handler(Looper.getMainLooper()).post {
+                busy = false
+                for (m in a) {
+                    val eff = Store.str("friendEffect")
+                    if (eff.isBlank()) break
+                    if (Friend.verify(m)) {
+                        Friend.applyEffect(app, eff)
+                        toast(app, if (Friend.count() > 1) "${Friend.lastApprover}이(가) 승인했어요" else "친구가 승인했어요")
+                        break
+                    }
+                }
+                for (m in b) {
+                    if (Store.str("policyTopic") != polTopic) break
+                    if (Friend.applyPolicy(m, polTopic) == null) {
+                        Store.put("policyTopic", "")
+                        toast(app, "친구가 자유 시간을 정해 줬어요")
+                        break
+                    }
+                }
+            }
+        }.start()
+    }
+}
+
 /** 요청마다 새로 만드는 임시 주소(ntfy 주제)로 친구의 답을 받아 온다. 주소를 아는 사람만 읽고 쓸 수 있다. */
 object Relay {
     fun newTopic(): String {
         val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
         val r = SecureRandom()
         return "dandan-r-" + (1..24).map { chars[r.nextInt(chars.length)] }.joinToString("")
+    }
+
+    /** 주제에 한 줄을 남긴다(백그라운드). 주제가 비었으면 아무것도 안 한다. */
+    fun postAsync(topic: String, text: String) {
+        if (!Regex("[A-Za-z0-9_-]{8,64}").matches(topic)) return
+        Thread {
+            try {
+                val c = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
+                c.requestMethod = "POST"
+                c.connectTimeout = 8000
+                c.readTimeout = 8000
+                c.doOutput = true
+                c.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                c.responseCode
+                c.disconnect()
+            } catch (e: Exception) { }
+        }.start()
     }
 
     /** 주제에 쌓인 메시지를 읽어 온다. 실패하면 빈 목록. */

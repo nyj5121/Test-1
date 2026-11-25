@@ -68,6 +68,11 @@
   }
   function btn(label, cls, fn) { var b = h('button', 'btn ' + (cls || ''), label); b.onclick = fn; return b; }
   function now() { return Math.floor(Date.now() / 1000); }
+  function leftText(sec) {
+    var m = Math.max(1, Math.round(sec / 60));
+    if (m < 90) return m + '분';
+    return Math.round(m / 60) + '시간';
+  }
 
   function copyText(text, onDone) {
     function fallback() {
@@ -105,6 +110,41 @@
       var res = await fetch('https://ntfy.sh/' + t, { method: 'POST', body: code });
       return res.ok;
     } catch (e) { return false; }
+  }
+
+  /* 같은 요청을 여러 친구에게 보냈을 때: 누가 먼저 답했거나 요청자가 닫았다면 이 링크는 더 못 쓴다.
+     임시 주소에 메시지(승인 코드 또는 DONE)가 하나라도 있으면 '처리됨'으로 본다. */
+  function validT(t) { return !!t && /^[A-Za-z0-9_-]{8,64}$/.test(t); }
+  async function isHandled(t) {
+    if (!validT(t)) return false;
+    try {
+      var res = await fetch('https://ntfy.sh/' + t + '/json?poll=1&since=all');
+      if (!res.ok) return false;
+      var txt = await res.text();
+      return txt.split('\n').some(function (l) {
+        try { return JSON.parse(l).event === 'message'; } catch (e) { return false; }
+      });
+    } catch (e) { return false; }
+  }
+  var watcher = null;
+  function stopWatch() { if (watcher) { watcher.stop(); watcher = null; } }
+  function watch(t, onHandled) {
+    stopWatch();
+    if (!validT(t)) return;
+    var stopped = false, iv = null;
+    watcher = { stop: function () { stopped = true; if (iv) clearInterval(iv); } };
+    async function chk() {
+      if (stopped) return;
+      if (await isHandled(t) && !stopped) { stopWatch(); onHandled(); }
+    }
+    iv = setInterval(chk, 10000);
+    chk();
+  }
+  function handledView(who, title) {
+    app.replaceChildren(header(title || '이미 처리된 요청'),
+      h('div', 'card', h('h2', null, '이미 처리됐어요'),
+        h('p', null, '다른 친구가 먼저 답했거나 ' + who + '님이 요청을 닫았어요. 이 링크는 더 쓸 수 없어요.'),
+        h('p', 'dim', '더 해 줄 일은 없어요.')));
   }
 
   function deliveredCard(title, text, code) {
@@ -205,7 +245,7 @@
     var main = h('div', 'card',
       h('p', 'big', C.describe(q)),
       h('div', 'quote', q.reason ? q.reason : '(사유를 적지 않았어요)'),
-      h('p', 'dim', Math.max(1, Math.round(left / 60)) + '분 안에 답해 주세요'));
+      h('p', 'dim', leftText(left) + ' 안에 답해 주세요'));
     app.append(stepBox, main);
     if (!loadKey()) { app.append(noKeyCard(who), backupBox()); return; }
 
@@ -228,6 +268,8 @@
         btn('다시 생각할게요', 'sub', function () { stepBox.replaceChildren(steps(1, labels)); ask(); }));
     }
     async function approve() {
+      stopWatch();
+      if (await isHandled(t)) { handledView(who); return; }
       try {
         var k = loadKey();
         var code = await C.sign(k.priv, text);
@@ -236,11 +278,12 @@
           area.replaceChildren(deliveredCard('승인했어요 ✓', who + '님 폰에 자동으로 전달됐어요. 더 할 일은 없어요.', code));
         } else {
           area.replaceChildren(sendCard('승인 코드가 만들어졌어요', code,
-            '자동 전달이 안 됐어요. ' + who + '님에게 이 코드를 직접 보내 주세요. 이 요청에만 쓸 수 있고, 30분 안에 써야 해요.'));
+            '자동 전달이 안 됐어요. ' + who + '님에게 이 코드를 직접 보내 주세요. 이 요청에만 쓸 수 있고, 유효시간 안에 써야 해요.'));
         }
       } catch (e) { area.replaceChildren(h('div', 'card bad', '코드를 만들 수 없어요. 일반 브라우저에서 다시 열어 주세요.')); }
     }
     ask();
+    watch(t, function () { handledView(who); });
   }
 
   /* ---------- 3) 바보폰 자유 시간 정하기 ---------- */
@@ -302,6 +345,8 @@
 
     var out = h('div');
     var go = btn('이대로 승인할게요', '', async function () {
+      stopWatch();
+      if (await isHandled(t)) { handledView(who, '자유 시간 정하기'); return; }
       try {
         var good = rows.filter(function (r) { return r.s && r.e && r.s !== r.e && (r.d & 127); });
         var ver = now(), exp = ver + days * 86400;
@@ -317,9 +362,11 @@
       } catch (e) { out.replaceChildren(h('div', 'card bad', '코드를 만들 수 없어요. 일반 브라우저에서 다시 열어 주세요.')); }
     });
     app.append(list, presets, validity, go, out);
+    watch(t, function () { handledView(who, '자유 시간 정하기'); });
   }
 
   function render() {
+    stopWatch();
     app.replaceChildren();
     if (inApp()) app.append(h('div', 'card warn', '앱 안의 브라우저로 열린 것 같아요. 연결 정보가 저장되지 않을 수 있으니, 오른쪽 위 메뉴의 "다른 브라우저로 열기"로 크롬이나 사파리에서 열어 주세요.'));
     var q = new URLSearchParams(location.hash.replace(/^#/, ''));

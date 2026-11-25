@@ -134,10 +134,9 @@ fun ScheduleTab(goPerm: () -> Unit) {
     ask?.let { pair ->
         val sc = pair.first
         FriendRequestDialog(
-            kind = "sched_edit", label = "${Fmt.clock(sc.startMin)}-${Fmt.clock(sc.endMin)}", param = "10",
+            kind = "sched_edit", label = "${Fmt.clock(sc.startMin)}-${Fmt.clock(sc.endMin)}", param = "10", effect = "sched:${sc.id}",
             onDismiss = { ask = null },
             onApproved = {
-                Store.put("schedPass_${sc.id}", System.currentTimeMillis() + 10 * 60_000L)
                 ask = null
                 pair.second()
             }

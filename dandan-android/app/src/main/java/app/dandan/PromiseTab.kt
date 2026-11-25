@@ -160,6 +160,11 @@ private fun InstagramBlock() {
         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     if (Store.igMode) {
+        SwitchLine("릴스는 스크롤만 막기", Store.igReels) { Store.igReels = it }
+        Text(
+            "켜면 릴스 탭을 완전히 막지 않고 열어 주되, 위아래로 넘길 수 없게 화면을 덮어요. 보이는 릴스 한 개만 볼 수 있고 좋아요·댓글도 누를 수 없어요. 다른 탭에 갔다가 돌아오면 다른 릴스가 나올 수 있어요.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("피드 가림막 시작 위치", Modifier.weight(1f), fontSize = 14.sp)
             Pick(

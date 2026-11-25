@@ -124,6 +124,10 @@ object Store {
     var igMode: Boolean
         get() = bool("igMode", false)
         set(v) = put("igMode", v)
+    /** 인스타 릴스를 열 수는 있지만 넘기지(스크롤) 못하게 막는다. */
+    var igReels: Boolean
+        get() = bool("igReels", false)
+        set(v) = put("igReels", v)
     var igDiag: Boolean
         get() = bool("igDiag", false)
         set(v) = put("igDiag", v)
