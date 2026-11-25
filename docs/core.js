@@ -44,7 +44,7 @@
   function parseReq(s) {
     var p = String(s).split('|');
     if (p.length < 7 || p[0] !== 'd1') return null;
-    return { kind: p[1], label: p[2], param: p[3], nonce: p[4], exp: parseInt(p[5], 10), from: p[6], reason: p[7] || '' };
+    return { kind: p[1], label: p[2], param: p[3], nonce: p[4], exp: parseInt(p[5], 10), from: p[6], reason: p[7] || '', need: Math.max(1, parseInt(p[8], 10) || 1) };
   }
 
   function describe(q) {
@@ -55,7 +55,7 @@
       case 'phone_unlock': return who + '이(가) 폰 잠금을 지금 풀어 달래요.';
       case 'sched_edit': return who + '이(가) 잠금 예약(' + q.label + ')을 고치거나 지우게 해 달래요.';
       case 'relax': return who + '이(가) 철벽 모드 같은 잠금 강도 설정을 끄게 해 달래요.';
-      case 'cfg_change': return who + '이(가) 친구 해제 설정을 바꾸려고 해요: ' + q.label;
+      case 'cfg_change': return who + '이(가) 설정을 바꾸려고 해요: ' + q.label;
       case 'dumb_free': return who + '이(가) 바보폰에서 ' + q.param + '분 동안 벗어나게 해 달래요.';
       default: return who + '의 요청: ' + q.label;
     }

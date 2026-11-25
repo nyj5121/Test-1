@@ -180,6 +180,17 @@ fun SettingsTab(goPerm: () -> Unit) {
                 else "꺼짐 — 요청을 친구에게 직접 보내야 해요",
                 onClick = { notifyDlg = true }
             ) { Text("›", fontSize = 20.sp) }
+            if (Friend.count() >= 2) {
+                Row2(
+                    "필요한 동의 수",
+                    if (Friend.quorum() <= 1) "친구 한 명만 승인해도 돼요" else "친구 ${Friend.quorum()}명이 모두 승인해야 풀려요 (바보폰 자유 시간 정하기는 한 명이 정해요)"
+                ) {
+                    Pick("${Friend.quorum()}명", (1..Friend.count()).map { "${it}명" to it }) { n ->
+                        if (n >= Friend.quorum()) Store.put("quorum", n)
+                        else cfgAsk = Pair<String, () -> Unit>("필요한 동의 수 줄이기: ${n}명", { Store.put("quorum", n) })
+                    }
+                }
+            }
             Text(
                 "아래 옵션을 켜면 그 상황에서 내가 아니라 친구가 풀지 말지 결정해요. 옵션을 끄거나 친구를 끊을 때도 친구 승인이 필요해요.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary,

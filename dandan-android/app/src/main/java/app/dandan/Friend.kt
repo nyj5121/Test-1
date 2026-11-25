@@ -229,11 +229,12 @@ object Friend {
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val req = listOf(
             "d1", kind, clean(label), param, enc(nonce), (now + REQUEST_TTL).toString(),
-            clean(myName()), cleanReason(reason)
+            clean(myName()), cleanReason(reason), quorum().toString()
         ).joinToString("|")
         // 이전 요청이 아직 열려 있었다면 그 링크는 더 못 쓰게 닫는다
         if (Store.str("friendPending").isNotBlank()) Relay.postAsync(Store.str("friendReply"), "DONE")
         Store.put("friendPending", req)
+        Store.put("friendAppr", "")
         Store.put("friendEffect", effect)
         Store.put("friendReply", Relay.newTopic())
         return req
@@ -316,6 +317,20 @@ object Friend {
         if (Store.str("friendPending").isNotBlank()) Relay.postAsync(Store.str("friendReply"), "DONE")
         Store.put("friendPending", "")
         Store.put("friendEffect", "")
+        Store.put("friendAppr", "")
+    }
+
+    /** 승인에 필요한 서로 다른 친구 수. 설정값이지만 등록된 친구 수를 넘을 수는 없다. */
+    fun quorum(): Int = Store.int("quorum", 1).coerceIn(1, maxOf(1, count()))
+
+    /** 이 요청에 필요한 동의 수. 요청에 서명돼 실린 값이라 나중에 바꿀 수 없다(친구 수가 줄었으면 그만큼만). */
+    fun need(req: String): Int =
+        (req.split("|").getOrNull(8)?.toIntOrNull() ?: 1).coerceIn(1, maxOf(1, count()))
+
+    /** 지금 요청에 동의한(아직 등록된) 친구 수 */
+    fun have(): Int {
+        val keys = list().map { it.pk }.toSet()
+        return Store.str("friendAppr").split(",").filter { it.isNotBlank() && it in keys }.toSet().size
     }
 
     /**
@@ -389,8 +404,13 @@ object Friend {
         if (System.currentTimeMillis() / 1000 > exp) return false
         val who = signer(pending, code) ?: return false
         lastApprover = who.name
+        // 서로 다른 친구의 동의를 모은다. 같은 친구가 여러 번 보내도 한 번으로 센다.
+        val got = Store.str("friendAppr").split(",").filter { it.isNotBlank() }.toMutableList()
+        if (who.pk !in got) { got.add(who.pk); Store.put("friendAppr", got.joinToString(",")) }
+        if (have() < need(pending)) return false
         Store.put("friendPending", "")
         Store.put("friendEffect", "")
+        Store.put("friendAppr", "")
         Relay.postAsync(Store.str("friendReply"), "DONE")
         return true
     }
@@ -482,6 +502,7 @@ fun FriendRequestDialog(
     var sent by remember { mutableStateOf("") }
     var manual by remember { mutableStateOf(false) }
     var waitNote by remember { mutableStateOf("친구의 승인을 기다리는 중…") }
+    var tickProgress by remember { mutableIntStateOf(0) }
     val r = req
 
     LaunchedEffect(r) {
@@ -508,6 +529,7 @@ fun FriendRequestDialog(
                     onApproved(); onDismiss(); return@LaunchedEffect
                 }
             }
+            tickProgress++
             delay(6000)
         }
     }
@@ -581,6 +603,13 @@ fun FriendRequestDialog(
                         fontSize = 13.sp
                     )
                     Text(waitNote, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+                    tickProgress
+                    if (Friend.need(r) > 1) {
+                        Text(
+                            "친구 ${Friend.need(r)}명이 동의해야 해요 · 지금 ${Friend.have()}명",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold
+                        )
+                    }
                     TextButton(onClick = { manual = !manual }) {
                         Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력")
                     }
@@ -608,7 +637,7 @@ fun FriendRequestDialog(
                             if (effect.isNotBlank()) Friend.applyEffect(ctx, effect)
                             onApproved(); onDismiss()
                         }
-                        else err = "코드가 맞지 않거나 만료됐어요."
+                        else err = if (Friend.have() > 0) "동의 ${Friend.have()}/${Friend.need(r)}명 — 다른 친구의 코드도 필요해요." else "코드가 맞지 않거나 만료됐어요."
                     }
                 ) { Text("확인") }
             }
