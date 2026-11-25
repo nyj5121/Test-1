@@ -160,9 +160,9 @@ private fun InstagramBlock() {
         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     if (Store.igMode) {
-        SwitchLine("릴스는 스크롤만 막기", Store.igReels) { Store.igReels = it }
+        SwitchLine("홈 피드는 스크롤만 막기", Store.igFeed) { Store.igFeed = it }
         Text(
-            "켜면 릴스 탭을 완전히 막지 않고 열어 주되, 위아래로 넘길 수 없게 화면을 덮어요. 보이는 릴스 한 개만 볼 수 있고 좋아요·댓글도 누를 수 없어요. 다른 탭에 갔다가 돌아오면 다른 릴스가 나올 수 있어요.",
+            "켜면 홈의 피드를 가리지 않고 보이는 그대로 두되, 아래로 넘길 수 없게 투명한 막을 덮어요. 처음 보이는 게시물만 볼 수 있고 좋아요·댓글도 누를 수 없어요. 스토리 줄과 아래 탭은 그대로 써요. 피드가 이미 내려가 있다면 아래 홈 탭을 눌러 맨 위로 올리세요.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

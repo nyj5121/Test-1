@@ -536,20 +536,14 @@ class GuardService : AccessibilityService() {
         val top0 = statusBarH()
         val regions = ArrayList<Region>()
         if (!tabBar) {
-            if (hasClipsViewer) {
-                if (Store.igReels) regions.addAll(reelLock(top0, sh, sw))
-                else regions.add(Region("reel", Rect(0, top0, sw, sh), "릴스는 볼 수 없어요.", 0xF5, 2))
-            }
+            if (hasClipsViewer) regions.add(Region("reel", Rect(0, top0, sw, sh), "릴스는 볼 수 없어요.", 0xF5, 2))
             applyRegions(regions)
             return
         }
 
         val dmTabs = setOf("direct_tab", "메시지", "Messages")
         val homeTabs = setOf("feed_tab", "홈", "Home")
-        val reelTabs = setOf("clips_tab", "릴스", "Reels")
-        val reelsLocked = Store.igReels
         val blockedTabs = setOf("clips_tab", "search_tab", "profile_tab", "릴스", "검색 및 탐색", "프로필", "Reels", "Search and Explore", "Profile")
-            .let { if (reelsLocked) it - reelTabs else it }
         val bottom = if (tabBarTop > 0) tabBarTop else tabRects.values.minOf { it.top }
 
         for ((k, rc) in tabRects) {
@@ -558,7 +552,6 @@ class GuardService : AccessibilityService() {
         val sel = selectedTab
         when {
             sel == null || sel in dmTabs -> { }   // 메시지 탭이거나 못 알아봄: 내용은 그대로 둔다
-            reelsLocked && sel in reelTabs -> regions.addAll(reelLock(top0, bottom, sw))
             sel in blockedTabs ->
                 regions.add(Region("content", Rect(0, top0, sw, bottom), "이 화면은 쓸 수 없어요.\n아래에서 홈(스토리)이나 메시지 탭을 누르세요.", 0xF5, 1))
             sel in homeTabs -> {
@@ -568,21 +561,22 @@ class GuardService : AccessibilityService() {
                     trayBottom > 0 -> trayBottom
                     else -> top0 + (bottom - top0) * 28 / 100
                 }.coerceIn(top0, bottom - 100)
-                regions.add(Region("content", Rect(0, top, sw, bottom), "피드는 가려져 있어요.\n위에서 스토리를 보거나\n아래 메시지 탭으로 가세요.", 0xF2, 0))
+                if (Store.igFeed) regions.addAll(feedLock(top, bottom, sw))
+                else regions.add(Region("content", Rect(0, top, sw, bottom), "피드는 가려져 있어요.\n위에서 스토리를 보거나\n아래 메시지 탭으로 가세요.", 0xF2, 0))
             }
         }
         applyRegions(regions)
     }
 
     /**
-     * 릴스 스크롤 막기: 보이는 릴스는 그대로 두되, 그 위에 투명한 막을 덮어 터치를 전부 삼킨다.
-     * 위에는 안내 띠를 둔다. 탭 바는 덮지 않아서 홈·메시지로 갈 수 있다.
+     * 홈 피드 스크롤 막기: 스토리 줄 아래 피드는 보이는 그대로 두되, 그 위에 투명한 막을 덮어 터치를 전부 삼킨다.
+     * 막 아래쪽에 안내 띠를 둔다. 스토리 줄과 탭 바는 덮지 않아서 스토리·메시지는 그대로 쓴다.
      */
-    private fun reelLock(top0: Int, bottom: Int, sw: Int): List<Region> {
-        val bh = (44 * resources.displayMetrics.density).toInt()
+    private fun feedLock(top: Int, bottom: Int, sw: Int): List<Region> {
+        val bh = (36 * resources.displayMetrics.density).toInt()
         return listOf(
-            Region("reelLock", Rect(0, top0 + bh, sw, bottom), "", 0x00, 0),
-            Region("reelBanner", Rect(0, top0, sw, top0 + bh), "릴스는 넘길 수 없어요 · 보이는 한 개만", 0xE0, 0)
+            Region("feedLock", Rect(0, top, sw, bottom), "", 0x00, 0),
+            Region("feedBanner", Rect(0, (bottom - bh).coerceAtLeast(top), sw, bottom), "피드는 넘길 수 없어요", 0xCC, 0)
         )
     }
 
