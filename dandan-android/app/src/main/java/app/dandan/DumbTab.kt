@@ -249,9 +249,15 @@ fun DumbTab(goPerm: () -> Unit) {
     if (startDlg) {
         DumbStartDialog(
             onStart = { days ->
-                Dumb.startPeriod(ctx, days)
-                Store.dumbOn = true
-                startDlg = false
+                // 기간도 없고 자유 시간도 없고 친구 승인도 없으면 끌 방법이 없어서 켜지 못하게 한다
+                val canEscape = Friend.scopeOn("dumb_release") || Dumb.friendControlled() || Dumb.windows().isNotEmpty()
+                if (days == 0 && !canEscape) {
+                    toast(ctx, "기간 없이 켜면 끌 방법이 없어요. 자유 시간을 먼저 하나 정하거나, 기간을 골라 주세요")
+                } else {
+                    Dumb.startPeriod(ctx, days)
+                    Store.dumbOn = true
+                    startDlg = false
+                }
             },
             onDismiss = { startDlg = false }
         )
@@ -278,7 +284,7 @@ private fun DumbStartDialog(onStart: (Int) -> Unit, onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "기간을 정하면 그동안은 끌 수 없고, 끝나면 저절로 꺼져요. 기간 없이 켜면 자유 시간에만 끌 수 있어요.",
+                    "기간을 정하면 그동안은 끌 수 없고, 끝나면 저절로 꺼져요. 기간 없이 켜면 자유 시간에만 끌 수 있어서, 자유 시간(또는 친구 승인)이 하나도 없으면 켤 수 없어요.",
                     fontSize = 13.sp
                 )
                 Spacer(Modifier.height(10.dp))
