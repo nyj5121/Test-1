@@ -241,6 +241,7 @@ object Engine {
     // ---------- 수정 방지 ----------
     fun editLocked(s: Schedule): Boolean {
         if (Store.long("schedPass_${s.id}") > System.currentTimeMillis()) return false   // 친구가 허락함
+        if (Friend.scopeOn("sched_edit")) return true   // 친구 승인 옵션이 켜져 있으면 언제든 승인이 필요하다
         if (s.locked) return true
         if (!Store.editProtect || !s.enabled) return false
         val now = System.currentTimeMillis()

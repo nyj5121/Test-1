@@ -144,6 +144,7 @@ private fun AppPane(goPerm: () -> Unit) {
     var h by remember { mutableIntStateOf(0) }
     var m by remember { mutableIntStateOf(0) }
     var picker by remember { mutableStateOf(false) }
+    val listGate = rememberScopeGate("list_edit")
     var confirm by remember { mutableStateOf(false) }
     var n by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(1000); n++ } }
@@ -173,7 +174,7 @@ private fun AppPane(goPerm: () -> Unit) {
             apps.forEach { AppIcon(it, 48.dp) }
             Box(
                 Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant).clickable { picker = true },
+                    .background(MaterialTheme.colorScheme.surfaceVariant).clickable { listGate.run("잠글 앱 목록 바꾸기") { picker = true } },
                 contentAlignment = Alignment.Center
             ) { Text("+", fontSize = 26.sp) }
         }
@@ -194,6 +195,7 @@ private fun AppPane(goPerm: () -> Unit) {
         Spacer(Modifier.height(20.dp))
     }
 
+    listGate.Dialog()
     if (picker) {
         AppPicker(
             "잠글 앱 고르기", Store.appLockApps,

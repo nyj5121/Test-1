@@ -75,7 +75,9 @@ object Friend {
         Triple("promise_extra", "약속 앱 시간 추가", "약속한 앱을 더 쓰고 싶을 때, 내가 정하지 않고 친구가 정해요."),
         Triple("app_unlock", "앱 잠금 해제", "잠긴 앱을 잠깐 열고 싶을 때 친구에게 허락받아요."),
         Triple("phone_unlock", "폰 잠금 중간 해제", "폰 잠금을 끝나기 전에 풀려면 친구 승인이 필요해요. (패널티 없음)"),
-        Triple("sched_edit", "예약 수정·삭제·끄기", "'예약 잠금 전 수정 방지'로 막힌 예약을 고치려면 친구 승인이 필요해요."),
+        Triple("sched_edit", "예약 수정·삭제·끄기", "예약 잠금을 고치거나 지우거나 끄려면 언제든 친구 승인이 필요해요. (새로 추가·켜기는 그냥 돼요)"),
+        Triple("promise_edit", "약속·숏폼 차단 수정·끄기", "약속을 고치거나 지울 때, 유튜브 쇼츠·인스타 차단을 끌 때 친구 승인이 필요해요. (새 약속 추가는 그냥 돼요)"),
+        Triple("list_edit", "허용 앱·잠글 앱 목록 바꾸기", "잠금 중에 쓸 허용 앱과 잠글 앱 목록을 바꾸려면 친구 승인이 필요해요."),
         Triple("relax", "잠금 강도 설정 끄기", "곧 잠기는데 철벽 모드·앱 삭제 방지 등을 끄려면 친구 승인이 필요해요."),
         Triple("dumb_policy", "바보폰 자유 시간을 친구가 정하기", "바보폰에서 벗어날 수 있는 시간대를 친구만 정해요. 바보폰을 끄는 것도 친구 승인이 필요해요."),
         Triple("dumb_release", "바보폰 해제를 친구 승인으로", "바보폰을 끄려면(정한 기간이 남았어도) 친구 승인이 필요해요.")
@@ -192,6 +194,9 @@ object Friend {
     fun signer(message: String, sigB64: String): Pal? = list().firstOrNull { verifyRaw(it.pk, message, sigB64) }
     fun myName(): String = Store.str("myName", "나")
     fun scopeOn(s: String): Boolean = registered() && Store.bool("fs_$s")
+
+    /** 이 옵션이 꺼져 있거나, 친구가 최근(10분 안에) 승인해 줬으면 true. 바꿔도 되는 상태다. */
+    fun passed(scope: String): Boolean = !scopeOn(scope) || Store.long("scopePass_$scope") > System.currentTimeMillis()
 
     private const val F = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
 
@@ -336,6 +341,7 @@ object Friend {
                 "phone" -> Engine.releaseByFriend(ctx)
                 "sched" -> Store.put("schedPass_${p[1]}", System.currentTimeMillis() + 10 * 60_000L)
                 "relax" -> Store.put("relaxPass", System.currentTimeMillis() + 10 * 60_000L)
+                "scope" -> Store.put("scopePass_${p[1]}", System.currentTimeMillis() + 10 * 60_000L)
                 "dumbfree" -> Dumb.startSession(ctx, p[1].toInt() * 60_000L)
                 "dumboff" -> { Store.dumbOn = false; Store.put("dumbEndW", 0L) }
             }
@@ -610,6 +616,32 @@ fun FriendRequestDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )
 }
+
+/**
+ * "친구 승인이 있어야 바꿀 수 있는" 변경을 한곳에서 처리한다.
+ * gate.run("무엇을") { 바꾸는 일 } — 옵션이 꺼져 있거나 최근 승인받았으면 바로 하고, 아니면 요청 창을 띄운다.
+ * 화면 끝에서 gate.Dialog()를 한 번 불러 줘야 한다.
+ */
+class ScopeGate(val scope: String) {
+    var pending by mutableStateOf<Pair<String, () -> Unit>?>(null)
+
+    fun run(label: String, then: () -> Unit) {
+        if (Friend.passed(scope)) then() else pending = Pair(label, then)
+    }
+
+    @Composable
+    fun Dialog() {
+        val p = pending ?: return
+        FriendRequestDialog(
+            kind = "cfg_change", label = p.first, param = "0", effect = "scope:$scope",
+            onDismiss = { pending = null },
+            onApproved = { pending = null; p.second() }
+        )
+    }
+}
+
+@Composable
+fun rememberScopeGate(scope: String): ScopeGate = remember(scope) { ScopeGate(scope) }
 
 /** 친구 등록 창: 내 이름, 초대 링크 보내기, 친구가 준 연결 코드 붙여넣기. */
 @Composable

@@ -109,6 +109,8 @@ fun PromiseTab() {
     val list = Store.promises()
     var editing by remember { mutableStateOf<Promise?>(null) }
     var creating by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val gate = rememberScopeGate("promise_edit")
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -121,7 +123,9 @@ fun PromiseTab() {
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        items(list, key = { it.pkg }) { p -> PromiseCard(p) { editing = p } }
+        items(list, key = { it.pkg }) { p ->
+            PromiseCard(p) { gate.run("약속 고치기·지우기: ${Apps.label(ctx, p.pkg)}") { editing = p } }
+        }
         item {
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
@@ -133,34 +137,41 @@ fun PromiseTab() {
         item {
             Spacer(Modifier.height(8.dp))
             Text("숏폼 차단", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            SwitchLine("유튜브 쇼츠", Store.shortsYt) { Store.shortsYt = it }
+            SwitchLine("유튜브 쇼츠", Store.shortsYt) { want ->
+                if (want) Store.shortsYt = true else gate.run("유튜브 쇼츠 차단 끄기") { Store.shortsYt = false }
+            }
             Text(
                 "앱 화면 구성이 바뀌면 동작하지 않을 수 있어요.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            InstagramBlock()
+            InstagramBlock(gate)
         }
     }
 
     if (creating || editing != null) {
         PromiseEditor(editing, onDismiss = { creating = false; editing = null })
     }
+    gate.Dialog()
 }
 
 @Composable
-private fun InstagramBlock() {
+private fun InstagramBlock(gate: ScopeGate) {
     val ctx = LocalContext.current
     Spacer(Modifier.height(20.dp))
     Text("인스타그램", fontSize = 16.sp, fontWeight = FontWeight.Bold)
     SwitchLine("스토리·DM만 쓰기", Store.igMode) { want ->
-        if (want && !Perm.accessibility(ctx)) toast(ctx, "접근성 권한을 먼저 켜 주세요") else Store.igMode = want
+        if (!want) gate.run("인스타 차단 끄기") { Store.igMode = false }
+        else if (!Perm.accessibility(ctx)) toast(ctx, "접근성 권한을 먼저 켜 주세요")
+        else Store.igMode = true
     }
     Text(
         "홈의 피드를 가리고 릴스·탐색·프로필을 막아요. 스토리와 DM은 그대로 써요. 못 알아보는 화면에서는 아무것도 하지 않아요.",
         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     if (Store.igMode) {
-        SwitchLine("홈 피드는 스크롤만 막기", Store.igFeed) { Store.igFeed = it }
+        SwitchLine("홈 피드는 스크롤만 막기", Store.igFeed) { want ->
+            if (want) Store.igFeed = true else gate.run("인스타 피드 스크롤 막기 끄기") { Store.igFeed = false }
+        }
         Text(
             "켜면 홈의 피드를 가리지 않고 보이는 그대로 두되, 아래로 넘길 수 없게 투명한 막을 덮어요. 처음 보이는 게시물만 볼 수 있고 좋아요·댓글도 누를 수 없어요. 스토리 줄과 아래 탭은 그대로 써요. 피드가 이미 내려가 있다면 아래 홈 탭을 눌러 맨 위로 올리세요.",
             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -253,7 +264,9 @@ private fun PromiseEditor(init: Promise?, onDismiss: () -> Unit) {
     FullDialog(
         "약속 정하기", onCancel = onDismiss,
         onSave = {
+            val clash = Store.promises().any { it.pkg == pkg && it.pkg != init?.pkg }
             if (pkg.isBlank()) toast(ctx, "앱을 골라 주세요")
+            else if ((init != null || clash) && !Friend.passed("promise_edit")) toast(ctx, "친구 승인 시간이 지났어요. 목록에서 다시 눌러 승인을 받아 주세요")
             else {
                 val p = Promise(
                     pkg, unit, freq, limit, init?.streak ?: 0,
@@ -311,8 +324,12 @@ private fun PromiseEditor(init: Promise?, onDismiss: () -> Unit) {
             if (init != null) {
                 Spacer(Modifier.height(24.dp))
                 TextButton(onClick = {
-                    Store.savePromises(Store.promises().filter { it.pkg != init.pkg })
-                    onDismiss()
+                    if (!Friend.passed("promise_edit")) {
+                        toast(ctx, "친구 승인 시간이 지났어요. 목록에서 다시 눌러 승인을 받아 주세요")
+                    } else {
+                        Store.savePromises(Store.promises().filter { it.pkg != init.pkg })
+                        onDismiss()
+                    }
                 }) { Text("이 약속 지우기", color = MaterialTheme.colorScheme.error) }
             }
         }

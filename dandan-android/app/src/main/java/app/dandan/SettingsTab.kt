@@ -87,6 +87,7 @@ fun SettingsTab(goPerm: () -> Unit) {
     var faq by remember { mutableStateOf(false) }
     var friendSetup by remember { mutableStateOf(false) }
     var friendAdd by remember { mutableStateOf(false) }
+    val listGate = rememberScopeGate("list_edit")
     var notifyDlg by remember { mutableStateOf(false) }
     var logDlg by remember { mutableStateOf(false) }
     var cfgAsk by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
@@ -100,7 +101,7 @@ fun SettingsTab(goPerm: () -> Unit) {
             Store.allowed.let { a ->
                 if (a.isEmpty()) "잠금 중에도 쓸 앱 (없음)" else a.joinToString(", ") { Apps.label(ctx, it) }
             },
-            onClick = { allowedPicker = true }
+            onClick = { listGate.run("허용 앱 목록 바꾸기") { allowedPicker = true } }
         ) { Text("›", fontSize = 20.sp) }
         Row2("잠금 화면 꾸미기", "배경 사진과 시계 링 색을 바꿔요", onClick = { deco = true }) { Text("›", fontSize = 20.sp) }
         Row2("긴급 잠금 해제", "켜면 잠금 중 대가를 치르고 풀 수 있어요 (기본 꺼짐)") {
@@ -212,6 +213,7 @@ fun SettingsTab(goPerm: () -> Unit) {
             onDismiss = { allowedPicker = false }
         )
     }
+    listGate.Dialog()
     if (deco) DecoDialog { deco = false }
     if (notifyDlg) NotifyDialog { notifyDlg = false }
     if (logDlg) LockLogDialog { logDlg = false }
