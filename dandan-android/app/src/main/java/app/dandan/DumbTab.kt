@@ -39,7 +39,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -336,16 +338,34 @@ fun FreeAskFlow(onDismiss: () -> Unit) {
 
 /** 자유 시간 요청·변경: 사유를 적어 링크를 만들고, 친구가 정한 정책 코드를 붙여넣는 창. */
 @Composable
-private fun DumbPolicyDialog(onDismiss: () -> Unit) {
+fun DumbPolicyDialog(onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     var reason by remember { mutableStateOf("") }
     var made by remember { mutableStateOf(false) }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
     var sent by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf(false) }
+    var topic by remember { mutableStateOf("") }
+
+    // 친구가 링크에서 정책을 승인하면 코드가 임시 주소로 오고, 여기서 받아 자동으로 적용한다
+    LaunchedEffect(topic) {
+        if (topic.isBlank()) return@LaunchedEffect
+        while (true) {
+            val msgs: List<String> = withContext(Dispatchers.IO) { Relay.fetch(topic) }
+            for (m in msgs) {
+                if (Friend.applyPolicy(m) == null) {
+                    toast(ctx, "자유 시간을 적용했어요")
+                    onDismiss()
+                    return@LaunchedEffect
+                }
+            }
+            delay(6000)
+        }
+    }
     val msg = if (!made) "" else
         "[단단] ${Friend.myName()}의 요청\n바보폰 자유 시간을 정해 주세요.\n사유: ${reason.trim()}\n\n" +
-            "링크를 열어 시간대를 정하고 승인해 주세요 ↓\n${Friend.policyLink(reason)}\n\n(승인하면 나오는 코드를 나한테 보내 줘)"
+            "링크를 열어 시간대를 정하고 승인해 주세요 ↓\n${Friend.policyLink(reason, topic)}\n\n(링크에서 승인만 누르면 끝나요)"
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("${Friend.name()}에게 자유 시간 요청") },
@@ -359,10 +379,12 @@ private fun DumbPolicyDialog(onDismiss: () -> Unit) {
                 )
                 if (!made) {
                     Button(enabled = reason.trim().isNotEmpty(), onClick = {
+                        val tp = Relay.newTopic()
+                        topic = tp
                         made = true
                         Notify.dispatch(
                             ctx, Friend.myName() + "이(가) 바보폰 자유 시간을 요청했어요", "사유: " + reason.trim(),
-                            Friend.policyLink(reason)
+                            Friend.policyLink(reason, tp)
                         ) { sent = it }
                     }) { Text("링크 만들기") }
                 } else {
@@ -379,18 +401,21 @@ private fun DumbPolicyDialog(onDismiss: () -> Unit) {
                     }
                     TextButton(onClick = { made = false; code = ""; err = "" }) { Text("사유 고쳐서 다시 만들기") }
                     Spacer(Modifier.height(6.dp))
-                    Text("3. 친구가 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
-                    OutlinedTextField(
-                        value = code, onValueChange = { code = it; err = "" },
-                        modifier = Modifier.fillMaxWidth(), maxLines = 5
-                    )
-                    TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    Text("3. 친구가 링크에서 승인하면 자동으로 적용돼요. 이 창을 열어 두세요.", fontSize = 13.sp)
+                    TextButton(onClick = { manual = !manual }) { Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력") }
+                    if (manual) {
+                        OutlinedTextField(
+                            value = code, onValueChange = { code = it; err = "" },
+                            modifier = Modifier.fillMaxWidth(), maxLines = 5
+                        )
+                        TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    }
                     if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 }
             }
         },
         confirmButton = {
-            if (made) {
+            if (made && manual) {
                 Button(
                     enabled = code.isNotBlank(),
                     onClick = {

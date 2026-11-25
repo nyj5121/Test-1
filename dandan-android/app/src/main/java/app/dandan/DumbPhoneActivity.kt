@@ -55,6 +55,8 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
     Store.rev.intValue
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var ask by remember { mutableStateOf(false) }
+    var policyAsk by remember { mutableStateOf(false) }
+    var offAsk by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
     if (!preview && !Dumb.active(ctx)) LaunchedEffect(now) { onClose() }
 
@@ -90,19 +92,35 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
                 )
             }
         }
+        // 바보폰 시간에는 단단 설정에 들어갈 수 없어서, 친구에게 부탁하는 것만 여기서 한다
         if (Dumb.friendControlled()) {
             Text(
-                "${Friend.name()}에게 자유 시간 요청", color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp,
+                "${Friend.name()}에게 자유 시간 잠깐 요청", color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp,
                 modifier = Modifier.clickable { ask = true }.padding(vertical = 8.dp)
             )
+            Text(
+                "자유 시간 정해 달라고 요청", color = Color.White.copy(alpha = 0.6f), fontSize = 15.sp,
+                modifier = Modifier.clickable { policyAsk = true }.padding(vertical = 8.dp)
+            )
         }
-        Text(
-            "단단 설정", color = Color.White.copy(alpha = 0.45f), fontSize = 15.sp,
-            modifier = Modifier.clickable {
-                ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }.padding(vertical = 8.dp)
-        )
+        if (Friend.scopeOn("dumb_release") || Dumb.friendControlled()) {
+            Text(
+                "바보폰 끄기 요청 (${Friend.name()} 승인)", color = Color.White.copy(alpha = 0.45f), fontSize = 15.sp,
+                modifier = Modifier.clickable { offAsk = true }.padding(vertical = 8.dp)
+            )
+        }
         if (preview) TextButton(onClick = onClose) { Text("미리보기 닫기") }
     }
     if (ask) FreeAskFlow { ask = false }
+    if (policyAsk) DumbPolicyDialog { policyAsk = false }
+    if (offAsk) {
+        FriendRequestDialog(
+            kind = "cfg_change", label = "바보폰 끄기", param = "0",
+            onDismiss = { offAsk = false },
+            onApproved = {
+                Store.dumbOn = false
+                Store.put("dumbEndW", 0L)
+            }
+        )
+    }
 }

@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Store.init(this)
+        if (redirectIfDumb()) return
         finished.value = intent.getBooleanExtra("finished", false)
         Scheduler.reschedule(this)
         setContent {
@@ -86,7 +87,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (redirectIfDumb()) return
         Store.bump()
+    }
+
+    /** 바보폰 시간에는 설정 화면을 열 수 없다. 접근성이 꺼져 있으면(권한을 고쳐야 할 때) 열어 둔다. */
+    fun redirectIfDumb(): Boolean {
+        if (Dumb.active(this) && Engine.phone(this) == null && GuardService.enabled(this)) {
+            startActivity(
+                Intent(this, DumbPhoneActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            )
+            finish()
+            return true
+        }
+        return false
     }
 }
 
@@ -96,6 +111,13 @@ fun MainScreen(finishedFlag: Boolean, dismissFinished: () -> Unit) {
     val ctx = LocalContext.current
     var tab by remember { mutableIntStateOf(0) }
     var showPerm by remember { mutableStateOf(false) }
+    // 열려 있는 동안 자유 시간이 끝나면 바로 바보폰 홈으로 돌려보낸다
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            (ctx as? MainActivity)?.redirectIfDumb()
+        }
+    }
     val tabs = listOf("🔒" to "잠금", "⏰" to "예약", "🤝" to "약속", "📵" to "바보폰", "⚙️" to "설정")
 
     Scaffold(

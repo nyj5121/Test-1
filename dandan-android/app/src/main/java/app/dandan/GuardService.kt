@@ -191,7 +191,12 @@ class GuardService : AccessibilityService() {
 
     private fun onWindow(pkg: String, cls: String) {
         // 우리 앱의 액티비티만 "앞에 있는 앱"으로 친다 (가림막 같은 창은 제외)
-        if (pkg == packageName) { if (cls.startsWith("app.dandan.")) fgPkg = pkg; return }
+        if (pkg == packageName) {
+            if (cls.startsWith("app.dandan.")) fgPkg = pkg
+            // 바보폰 시간에는 단단 설정 화면에 들어갈 수 없다
+            if (cls == "app.dandan.MainActivity" && Dumb.active(this) && Engine.phone(this) == null) openDumb()
+            return
+        }
         if (pkg in imePkgs) return
         val phone = Engine.phone(this)
 

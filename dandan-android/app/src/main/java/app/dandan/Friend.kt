@@ -32,6 +32,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,9 @@ import java.security.KeyFactory
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * 친구 승인. 서버 없이 서명으로 동작한다.
@@ -94,12 +98,12 @@ object Friend {
     }
 
     /** 친구가 자유 시간을 정하는 페이지로 가는 링크. 지금 정책을 함께 실어 보낸다. */
-    fun policyLink(reason: String = ""): String {
+    fun policyLink(reason: String = "", topic: String = ""): String {
         val q = listOf(
             "q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString(),
             cleanReason(reason)
         ).joinToString("|")
-        return base() + "#q=" + enc(q.toByteArray(Charsets.UTF_8))
+        return base() + "#q=" + enc(q.toByteArray(Charsets.UTF_8)) + if (topic.isNotBlank()) "&t=$topic" else ""
     }
 
     /** 친구가 만든 정책 코드("정책.서명")를 검증해 적용한다. 성공하면 null, 실패하면 이유를 돌려준다. */
@@ -161,6 +165,7 @@ object Friend {
             clean(myName()), cleanReason(reason)
         ).joinToString("|")
         Store.put("friendPending", req)
+        Store.put("friendReply", Relay.newTopic())
         return req
     }
 
@@ -185,9 +190,14 @@ object Friend {
         else -> label
     }
 
-    fun link(req: String): String = base() + "#r=" + enc(req.toByteArray(Charsets.UTF_8))
+    /** 요청 링크. 뒤에 붙는 t는 친구가 승인하면 답을 돌려보낼 임시 주소다. */
+    fun link(req: String): String {
+        val t = Store.str("friendReply")
+        return base() + "#r=" + enc(req.toByteArray(Charsets.UTF_8)) + if (t.isNotBlank()) "&t=$t" else ""
+    }
 
-    fun inviteLink(): String = base() + "#hello=1&from=" + URLEncoder.encode(myName(), "UTF-8")
+    fun inviteLink(topic: String = ""): String =
+        base() + "#hello=1&from=" + URLEncoder.encode(myName(), "UTF-8") + if (topic.isNotBlank()) "&t=$topic" else ""
 
     fun requestMessage(req: String): String =
         "[단단] ${myName()}의 요청\n${summary(req)}\n사유: ${reasonOf(req).ifBlank { "(없음)" }}\n\n" +
@@ -306,9 +316,11 @@ fun MinutesDialog(
 }
 
 /**
- * 친구에게 요청을 보내고, 돌려받은 승인 코드를 확인하는 창.
+ * 친구에게 요청을 보내고, 친구의 승인을 기다리는 창.
  * 먼저 사유를 적어야 요청이 만들어진다. 사유는 서명 대상에 들어가서 친구에게 그대로 보인다.
- * 요청을 만들면 설정한 알림(문자·푸시)이 자동으로 간다. allowShare=false면 공유 버튼을 숨긴다(폰 잠금 중).
+ * 친구가 링크에서 '승인'을 누르면 승인 코드가 임시 주소(ntfy)로 오고, 이 창이 자동으로 받아 적용한다.
+ * 자동 전달이 안 될 때를 위해 코드 직접 입력도 접어서 남겨 둔다.
+ * allowShare=false면 공유 버튼을 숨긴다(폰 잠금 중).
  */
 @Composable
 fun FriendRequestDialog(
@@ -326,7 +338,26 @@ fun FriendRequestDialog(
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
     var sent by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf(false) }
+    var waitNote by remember { mutableStateOf("친구의 승인을 기다리는 중…") }
     val r = req
+
+    LaunchedEffect(r) {
+        if (r == null) return@LaunchedEffect
+        val exp = r.split("|").getOrNull(5)?.toLongOrNull() ?: 0L
+        while (true) {
+            if (System.currentTimeMillis() / 1000 > exp) {
+                waitNote = "요청 시간이 지났어요. 아래 '사유 고쳐서 다시 만들기'를 눌러 주세요."
+                return@LaunchedEffect
+            }
+            val topic = Store.str("friendReply")
+            val msgs: List<String> = if (topic.isBlank()) emptyList() else withContext(Dispatchers.IO) { Relay.fetch(topic) }
+            for (m in msgs) {
+                if (Friend.verify(m)) { onApproved(); onDismiss(); return@LaunchedEffect }
+            }
+            delay(6000)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -347,6 +378,7 @@ fun FriendRequestDialog(
                         onClick = {
                             val nr = Friend.newRequest(kind, label, param, reason)
                             req = nr
+                            waitNote = "친구의 승인을 기다리는 중…"
                             Notify.dispatch(ctx, Friend.headline(nr), "사유: " + Friend.reasonOf(nr), Friend.link(nr)) { sent = it }
                         }
                     ) { Text("요청 만들기") }
@@ -381,14 +413,20 @@ fun FriendRequestDialog(
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    TextButton(onClick = { req = null; code = ""; err = ""; sent = "" }) { Text("사유 고쳐서 다시 만들기") }
+                    TextButton(onClick = { req = null; code = ""; err = ""; sent = ""; manual = false }) { Text("사유 고쳐서 다시 만들기") }
                     Spacer(Modifier.height(6.dp))
-                    Text("3. 친구가 승인하고 보내 준 코드를 붙여넣으세요.", fontSize = 13.sp)
-                    OutlinedTextField(
-                        value = code, onValueChange = { code = it; err = "" },
-                        modifier = Modifier.fillMaxWidth(), maxLines = 4
-                    )
-                    TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    Text("3. 친구가 링크에서 '승인'을 누르면 자동으로 적용돼요. 이 창을 열어 두세요.", fontSize = 13.sp)
+                    Text(waitNote, fontSize = 13.sp, color = MaterialTheme.colorScheme.secondary)
+                    TextButton(onClick = { manual = !manual }) {
+                        Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력")
+                    }
+                    if (manual) {
+                        OutlinedTextField(
+                            value = code, onValueChange = { code = it; err = "" },
+                            modifier = Modifier.fillMaxWidth(), maxLines = 4
+                        )
+                        TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                    }
                     if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                     Text(
                         "30분 안에 승인받아야 해요.",
@@ -398,7 +436,7 @@ fun FriendRequestDialog(
             }
         },
         confirmButton = {
-            if (r != null) {
+            if (r != null && manual) {
                 Button(
                     enabled = code.isNotBlank(),
                     onClick = {
@@ -420,6 +458,24 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
     var friend by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var err by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf(false) }
+    val topic = remember { Relay.newTopic() }
+
+    // 친구가 링크에서 '친구 되어 주기'를 누르면 연결 코드가 임시 주소로 오고, 여기서 받아 자동으로 등록한다
+    LaunchedEffect(Unit) {
+        while (true) {
+            val msgs: List<String> = withContext(Dispatchers.IO) { Relay.fetch(topic) }
+            for (m in msgs) {
+                if (Friend.register(friend.ifBlank { "친구" }, m)) {
+                    Store.put("myName", me.trim().ifBlank { "나" })
+                    toast(ctx, "친구를 등록했어요")
+                    onDismiss()
+                    return@LaunchedEffect
+                }
+            }
+            delay(5000)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -432,18 +488,21 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = {
                         Store.put("myName", me.trim().ifBlank { "나" })
-                        copyText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'를 누르고, 나온 연결 코드를 나한테 보내 줘.\n${Friend.inviteLink()}")
+                        copyText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'만 눌러 줘.\n${Friend.inviteLink(topic)}")
                         toast(ctx, "복사했어요")
                     }) { Text("링크 복사") }
                     OutlinedButton(onClick = {
                         Store.put("myName", me.trim().ifBlank { "나" })
-                        shareText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'를 누르고, 나온 연결 코드를 나한테 보내 줘.\n${Friend.inviteLink()}")
+                        shareText(ctx, "[단단] ${Friend.myName()}이(가) 너를 친구로 지정하고 싶대. 링크를 열어서 '친구 되어 주기'만 눌러 줘.\n${Friend.inviteLink(topic)}")
                     }) { Text("공유하기") }
                 }
                 Spacer(Modifier.height(12.dp))
-                Text("2. 친구가 보내 준 연결 코드를 붙여넣으세요.", fontSize = 13.sp)
-                OutlinedTextField(code, { code = it; err = "" }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
-                TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                Text("2. 친구가 링크에서 '친구 되어 주기'를 누르면 자동으로 등록돼요. 친구 이름을 먼저 적어 두세요. 이 창을 열어 두세요.", fontSize = 13.sp)
+                TextButton(onClick = { manual = !manual }) { Text(if (manual) "코드 직접 입력 접기" else "자동으로 안 되면 코드 직접 입력") }
+                if (manual) {
+                    OutlinedTextField(code, { code = it; err = "" }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                    TextButton(onClick = { code = readClipboard(ctx) }) { Text("붙여넣기") }
+                }
                 if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -453,7 +512,7 @@ fun FriendSetupDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            Button(
+            if (manual) Button(
                 enabled = code.isNotBlank() && friend.isNotBlank(),
                 onClick = {
                     Store.put("myName", me.trim().ifBlank { "나" })
@@ -663,4 +722,33 @@ fun NotifyDialog(onDismiss: () -> Unit) {
         confirmButton = { Button(onClick = { save(); onDismiss() }) { Text("저장") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } }
     )
+}
+
+/** 요청마다 새로 만드는 임시 주소(ntfy 주제)로 친구의 답을 받아 온다. 주소를 아는 사람만 읽고 쓸 수 있다. */
+object Relay {
+    fun newTopic(): String {
+        val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+        val r = SecureRandom()
+        return "dandan-r-" + (1..24).map { chars[r.nextInt(chars.length)] }.joinToString("")
+    }
+
+    /** 주제에 쌓인 메시지를 읽어 온다. 실패하면 빈 목록. */
+    fun fetch(topic: String): List<String> = try {
+        val c = URL("https://ntfy.sh/$topic/json?poll=1&since=all").openConnection() as HttpURLConnection
+        c.connectTimeout = 8000
+        c.readTimeout = 8000
+        val out = ArrayList<String>()
+        if (c.responseCode in 200..299) {
+            c.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.forEach { l ->
+                    try {
+                        val o = JSONObject(l)
+                        if (o.optString("event") == "message") out.add(o.optString("message").trim())
+                    } catch (e: Exception) { }
+                }
+            }
+        }
+        c.disconnect()
+        out
+    } catch (e: Exception) { emptyList() }
 }
