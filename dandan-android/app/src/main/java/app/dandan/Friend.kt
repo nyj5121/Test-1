@@ -104,11 +104,13 @@ object Friend {
     }
 
     /** 친구가 자유 시간을 정하는 페이지로 가는 링크. 지금 정책을 함께 실어 보낸다. */
+    fun policyQ(reason: String = ""): String = listOf(
+        "q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString(),
+        cleanReason(reason)
+    ).joinToString("|")
+
     fun policyLink(reason: String = "", topic: String = ""): String {
-        val q = listOf(
-            "q1", deviceId(), clean(myName()), Store.str("dumbWins"), Store.long("dumbExp").toString(),
-            cleanReason(reason)
-        ).joinToString("|")
+        val q = policyQ(reason)
         return base() + "#q=" + enc(q.toByteArray(Charsets.UTF_8)) + if (topic.isNotBlank()) "&t=$topic" else ""
     }
 
@@ -135,7 +137,10 @@ object Friend {
 
     fun base(): String = Store.str("friendBase", BASE_DEFAULT)
     /** 등록된 친구. 열쇠(pk)로 구분하고, 알림 받을 번호·주제도 친구마다 따로 둔다. */
-    data class Pal(val name: String, val pk: String, val phone: String = "", val topic: String = "")
+    data class Pal(val name: String, val pk: String, val phone: String = "", val topic: String = "", val inbox: String = "") {
+        /** 단단 앱끼리 연결된 친구(앱 안으로 요청이 간다) */
+        val app: Boolean get() = inbox.isNotBlank()
+    }
 
     const val MAX_FRIENDS = 5
 
@@ -162,7 +167,7 @@ object Friend {
             val a = JSONArray(raw.ifBlank { "[]" })
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
-                out.add(Pal(o.optString("n", "친구"), o.optString("k"), o.optString("p"), o.optString("t")))
+                out.add(Pal(o.optString("n", "친구"), o.optString("k"), o.optString("p"), o.optString("t"), o.optString("i")))
             }
         } catch (e: Exception) { }
         palRaw = raw
@@ -172,7 +177,7 @@ object Friend {
 
     fun saveList(l: List<Pal>) {
         val a = JSONArray()
-        l.forEach { a.put(JSONObject().put("n", it.name).put("k", it.pk).put("p", it.phone).put("t", it.topic)) }
+        l.forEach { a.put(JSONObject().put("n", it.name).put("k", it.pk).put("p", it.phone).put("t", it.topic).put("i", it.inbox)) }
         Store.put("friends", a.toString())
     }
 
@@ -196,7 +201,12 @@ object Friend {
     fun scopeOn(s: String): Boolean = registered() && Store.bool("fs_$s")
 
     /** 이 옵션이 꺼져 있거나, 친구가 최근(10분 안에) 승인해 줬으면 true. 바꿔도 되는 상태다. */
-    fun passed(scope: String): Boolean = !scopeOn(scope) || Store.long("scopePass_$scope") > System.currentTimeMillis()
+    fun passed(scope: String): Boolean {
+        val pass = Store.long("scopePass_$scope") > System.currentTimeMillis()
+        // 친구 추가·끊기는 옵션과 상관없이, 이미 친구가 있으면 항상 승인이 필요하다
+        if (scope == "friend_add") return !registered() || pass
+        return !scopeOn(scope) || pass
+    }
 
     private const val F = Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
 
@@ -295,7 +305,12 @@ object Friend {
 
     /** 알림 번호·주제를 저장한다(열쇠로 맞춰서 갱신). */
     fun updateContacts(rows: List<Pal>) {
-        saveList(list().map { f -> rows.firstOrNull { it.pk == f.pk }?.copy(name = f.name) ?: f })
+        saveList(list().map { f -> rows.firstOrNull { it.pk == f.pk }?.copy(name = f.name, inbox = f.inbox) ?: f })
+    }
+
+    /** 단단 앱끼리 연결된 친구의 받은 요청함 주소를 저장한다. */
+    fun setInbox(pk: String, inbox: String) {
+        saveList(list().map { if (it.pk == pk) it.copy(inbox = inbox) else it })
     }
 
     fun remove(pk: String) {
@@ -554,7 +569,7 @@ fun FriendRequestDialog(
                             val nr = Friend.newRequest(kind, label, param, reason, effect)
                             req = nr
                             waitNote = "친구의 승인을 기다리는 중…"
-                            Notify.dispatch(ctx, Friend.headline(nr), "사유: " + Friend.reasonOf(nr), Friend.link(nr)) { sent = it }
+                            Notify.dispatch(ctx, Friend.headline(nr), "사유: " + Friend.reasonOf(nr), Friend.link(nr), Link.requestPayload(nr)) { sent = it }
                         }
                     ) { Text("요청 만들기") }
                     Text(
@@ -583,7 +598,7 @@ fun FriendRequestDialog(
                         if (allowShare) OutlinedButton(onClick = { shareText(ctx, msg) }) { Text("다른 앱으로") }
                         if (Notify.any()) OutlinedButton(onClick = {
                             sent = "다시 보내는 중…"
-                            Notify.dispatch(ctx, Friend.headline(r), "사유: " + Friend.reasonOf(r), Friend.link(r)) { sent = it }
+                            Notify.dispatch(ctx, Friend.headline(r), "사유: " + Friend.reasonOf(r), Friend.link(r), Link.requestPayload(r)) { sent = it }
                         }) { Text("알림 다시 보내기") }
                     }
                     if (!allowShare) {
@@ -761,7 +776,8 @@ internal fun kakaoText(ctx: Context, text: String) {
 object Notify {
     fun smsOn(): Boolean = Store.bool("notifySms") && Friend.list().any { it.phone.isNotBlank() }
     fun pushOn(): Boolean = Store.bool("notifyPush") && Friend.list().any { it.topic.isNotBlank() }
-    fun any(): Boolean = smsOn() || pushOn()
+    fun appOn(): Boolean = Friend.list().any { it.app }
+    fun any(): Boolean = smsOn() || pushOn() || appOn()
 
     fun newTopic(): String {
         val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -779,7 +795,7 @@ object Notify {
      * 설정된 모든 방법으로 보내고, 결과 줄을 메인 스레드에서 onStatus로 알려 준다.
      * 문자는 두 통(설명 + 링크)으로 나가고, 푸시는 눌러서 바로 승인 페이지가 열린다.
      */
-    fun dispatch(ctx: Context, headline: String, detail: String, link: String, onStatus: (String) -> Unit) {
+    fun dispatch(ctx: Context, headline: String, detail: String, link: String, app: String = "", onStatus: (String) -> Unit) {
         if (!any()) { onStatus(""); return }
         val lines = ArrayList<String>()
         val main = Handler(Looper.getMainLooper())
@@ -803,6 +819,18 @@ object Notify {
                 Thread {
                     val ok = sendPush(f.topic, headline, detail, link)
                     synchronized(lines) { lines[idx] = if (ok) "푸시 ✓ 보냈어요$who" else "푸시 ✗ 못 보냈어요$who (인터넷 확인)" }
+                    publish()
+                }.start()
+            }
+        }
+        if (app.isNotBlank()) {
+            // 단단 앱끼리 연결된 친구: 받은 요청함으로 바로 보낸다
+            friends.filter { it.app }.forEach { f ->
+                val who = if (many) " (${f.name})" else ""
+                val idx = synchronized(lines) { lines.add("앱 … 보내는 중$who"); lines.size - 1 }
+                Thread {
+                    val ok = Relay.post(f.inbox, app)
+                    synchronized(lines) { lines[idx] = if (ok) "앱 ✓ 보냈어요$who" else "앱 ✗ 못 보냈어요$who (인터넷 확인)" }
                     publish()
                 }.start()
             }
@@ -962,6 +990,7 @@ object Approvals {
     private var busy = false
 
     fun tick(ctx: Context) {
+        Inbox.tick(ctx)
         val el = SystemClock.elapsedRealtime()
         if (busy || el - last < 10_000 || el - uiTs < 15_000) return
         val wall = System.currentTimeMillis()
@@ -1012,19 +1041,26 @@ object Relay {
 
     /** 주제에 한 줄을 남긴다(백그라운드). 주제가 비었으면 아무것도 안 한다. */
     fun postAsync(topic: String, text: String) {
-        if (!Regex("[A-Za-z0-9_-]{8,64}").matches(topic)) return
-        Thread {
-            try {
-                val c = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
-                c.requestMethod = "POST"
-                c.connectTimeout = 8000
-                c.readTimeout = 8000
-                c.doOutput = true
-                c.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
-                c.responseCode
-                c.disconnect()
-            } catch (e: Exception) { }
-        }.start()
+        if (!valid(topic)) return
+        Thread { post(topic, text) }.start()
+    }
+
+    fun valid(topic: String): Boolean = Regex("[A-Za-z0-9_-]{8,64}").matches(topic)
+
+    /** 주제에 한 줄을 남긴다(이 스레드에서). 성공하면 true. */
+    fun post(topic: String, text: String): Boolean {
+        if (!valid(topic)) return false
+        return try {
+            val c = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            c.doOutput = true
+            c.outputStream.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+            val code = c.responseCode
+            c.disconnect()
+            code in 200..299
+        } catch (e: Exception) { false }
     }
 
     /** 주제에 쌓인 메시지를 읽어 온다. 실패하면 빈 목록. */

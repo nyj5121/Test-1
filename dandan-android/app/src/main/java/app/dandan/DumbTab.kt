@@ -397,7 +397,7 @@ fun DumbPolicyDialog(onDismiss: () -> Unit) {
                         made = true
                         Notify.dispatch(
                             ctx, Friend.myName() + "이(가) 바보폰 자유 시간을 요청했어요", "사유: " + reason.trim(),
-                            Friend.policyLink(reason, tp)
+                            Friend.policyLink(reason, tp), Link.policyPayload(Friend.policyQ(reason), tp)
                         ) { sent = it }
                     }) { Text("링크 만들기") }
                 } else {

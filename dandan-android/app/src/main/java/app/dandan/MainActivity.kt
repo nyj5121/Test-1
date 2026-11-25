@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Store.init(this)
+        takeLinks(intent)
         if (redirectIfDumb()) return
         finished.value = intent.getBooleanExtra("finished", false)
         Scheduler.reschedule(this)
@@ -83,12 +84,25 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra("finished", false)) finished.value = true
+        takeLinks(intent)
     }
 
     override fun onResume() {
         super.onResume()
         if (redirectIfDumb()) return
         Store.bump()
+    }
+
+    /** 알림(받은 요청)이나 연결 링크(dandan://pair?c=...)로 열렸으면 친구 탭으로 보낸다. */
+    private fun takeLinks(i: Intent?) {
+        i ?: return
+        val data = i.data
+        if (data != null && data.scheme == "dandan") {
+            Store.put("pairPending", data.toString())
+            Nav.tab.intValue = MAIN_TAB_FRIEND
+        }
+        val t = i.getIntExtra("tab", -1)
+        if (t >= 0) Nav.tab.intValue = t
     }
 
     /** 바보폰 시간에는 설정 화면을 열 수 없다. 접근성이 꺼져 있으면(권한을 고쳐야 할 때) 열어 둔다. */
@@ -111,6 +125,9 @@ fun MainScreen(finishedFlag: Boolean, dismissFinished: () -> Unit) {
     val ctx = LocalContext.current
     var tab by remember { mutableIntStateOf(0) }
     var showPerm by remember { mutableStateOf(false) }
+    LaunchedEffect(Nav.tab.intValue) {
+        if (Nav.tab.intValue >= 0) { tab = Nav.tab.intValue; Nav.tab.intValue = -1 }
+    }
     // 열려 있는 동안 자유 시간이 끝나면 바로 바보폰 홈으로 돌려보낸다
     LaunchedEffect(Unit) {
         while (true) {
@@ -118,7 +135,11 @@ fun MainScreen(finishedFlag: Boolean, dismissFinished: () -> Unit) {
             (ctx as? MainActivity)?.redirectIfDumb()
         }
     }
-    val tabs = listOf("🔒" to "잠금", "⏰" to "예약", "🤝" to "약속", "📵" to "바보폰", "⚙️" to "설정")
+    val inboxN = Inbox.count()
+    val tabs = listOf(
+        "🔒" to "잠금", "⏰" to "예약", "🤝" to "약속", "📵" to "바보폰",
+        "👥" to (if (inboxN > 0) "친구 $inboxN" else "친구"), "⚙️" to "설정"
+    )
 
     Scaffold(
         bottomBar = {
@@ -155,6 +176,7 @@ fun MainScreen(finishedFlag: Boolean, dismissFinished: () -> Unit) {
                     1 -> ScheduleTab { showPerm = true }
                     2 -> PromiseTab()
                     3 -> DumbTab { showPerm = true }
+                    MAIN_TAB_FRIEND -> FriendTab()
                     else -> SettingsTab { showPerm = true }
                 }
             }
@@ -287,4 +309,9 @@ fun PermissionsScreen(onClose: () -> Unit) {
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** 다른 화면(알림·링크)에서 메인 탭을 바꿀 때 쓴다. -1이면 그대로. */
+object Nav {
+    val tab = androidx.compose.runtime.mutableIntStateOf(-1)
 }

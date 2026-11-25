@@ -99,6 +99,7 @@ fun LockScreen(onClose: () -> Unit) {
     var n by remember { mutableIntStateOf(0) }
     var emergency by remember { mutableStateOf(false) }
     var friendAsk by remember { mutableStateOf(false) }
+    var inbox by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { delay(250); n++ } }
 
     val phone = remember(n) { Engine.phone(ctx) }
@@ -173,6 +174,13 @@ fun LockScreen(onClose: () -> Unit) {
                         modifier = Modifier.clickable { friendAsk = true }.padding(8.dp)
                     )
                 }
+                if (Inbox.count() > 0) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "친구가 보낸 요청 ${Inbox.count()}개", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { inbox = true }.padding(8.dp)
+                    )
+                }
                 if (Store.emergencyEnabled && phone?.trial != true) {
                     Spacer(Modifier.height(16.dp))
                     Text(
@@ -184,6 +192,7 @@ fun LockScreen(onClose: () -> Unit) {
         }
     }
     if (emergency) EmergencyDialog(ctx, onDismiss = { emergency = false })
+    if (inbox) InboxDialog { inbox = false }
     if (friendAsk) {
         FriendRequestDialog(
             kind = "phone_unlock", label = "폰 잠금", param = "0", allowShare = false, effect = "phone",

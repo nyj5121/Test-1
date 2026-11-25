@@ -57,6 +57,7 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
     var ask by remember { mutableStateOf(false) }
     var policyAsk by remember { mutableStateOf(false) }
     var offAsk by remember { mutableStateOf(false) }
+    var inbox by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
     if (!preview && !Dumb.active(ctx)) LaunchedEffect(now) { onClose() }
 
@@ -109,10 +110,17 @@ fun DumbHome(preview: Boolean, onClose: () -> Unit) {
                 modifier = Modifier.clickable { offAsk = true }.padding(vertical = 8.dp)
             )
         }
+        if (Inbox.count() > 0) {
+            Text(
+                "친구가 보낸 요청 ${Inbox.count()}개", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { inbox = true }.padding(vertical = 8.dp)
+            )
+        }
         if (preview) TextButton(onClick = onClose) { Text("미리보기 닫기") }
     }
     if (ask) FreeAskFlow { ask = false }
     if (policyAsk) DumbPolicyDialog { policyAsk = false }
+    if (inbox) InboxDialog { inbox = false }
     if (offAsk) {
         FriendRequestDialog(
             kind = "cfg_change", label = "바보폰 끄기", param = "0", effect = "dumboff",
